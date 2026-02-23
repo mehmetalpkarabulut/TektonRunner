@@ -1,6 +1,7 @@
 package main
 
 import (
+	"archive/zip"
 	"bytes"
 	"crypto/rand"
 	"encoding/hex"
@@ -1370,6 +1371,9 @@ func runServer(addr, apiKey string) {
 
 func buildManifests(in *Input) ([]string, []AppTarget, error) {
 	setDefaults(in)
+	if err := autoDiscoverZipApps(in); err != nil {
+		return nil, nil, err
+	}
 	if err := validate(in); err != nil {
 		return nil, nil, err
 	}
@@ -1436,6 +1440,150 @@ func kubectlCmd(args ...string) *exec.Cmd {
 		cmd.Env = append(os.Environ(), "KUBECONFIG="+serverKubeconfig)
 	}
 	return cmd
+}
+
+func autoDiscoverZipApps(in *Input) error {
+	if in.Source.Type != "zip" {
+		return nil
+	}
+	if len(in.Apps) > 0 {
+		return nil
+	}
+	if strings.TrimSpace(in.Source.ContextSub) != "" {
+		return nil
+	}
+	if strings.TrimSpace(in.Source.ZipURL) == "" {
+		return nil
+	}
+
+	contexts, err := discoverZipDockerfileContexts(in.Source.ZipURL, in.Source.ZipUsername, in.Source.ZipPassword)
+	if err != nil {
+		return nil
+	}
+	if len(contexts) <= 1 {
+		return nil
+	}
+
+	basePort := in.Deploy.ContainerPort
+	if basePort == 0 {
+		basePort = 8080
+	}
+	seen := map[string]int{}
+	apps := make([]AppSpec, 0, len(contexts))
+	for _, ctx := range contexts {
+		base := autoAppBaseName(ctx, in.AppName, in.Image.Project)
+		base = sanitizeName(base)
+		if base == "" {
+			base = "app"
+		}
+		name := base
+		if seen[base] > 0 {
+			name = fmt.Sprintf("%s-%d", base, seen[base]+1)
+		}
+		seen[base]++
+		apps = append(apps, AppSpec{
+			AppName:       name,
+			Project:       name,
+			Tag:           strings.TrimSpace(in.Image.Tag),
+			ContainerPort: basePort,
+			ContextSubDir: ctx,
+		})
+	}
+	in.Apps = apps
+	if strings.TrimSpace(in.AppName) == "" {
+		in.AppName = apps[0].AppName
+	}
+	if strings.TrimSpace(in.Image.Project) == "" {
+		in.Image.Project = apps[0].Project
+	}
+	return nil
+}
+
+func autoAppBaseName(contextSub, appName, imageProject string) string {
+	if contextSub == "" || contextSub == "." {
+		if strings.TrimSpace(appName) != "" {
+			return appName
+		}
+		if strings.TrimSpace(imageProject) != "" {
+			return imageProject
+		}
+		return "app"
+	}
+	p := strings.Trim(contextSub, "/")
+	if p == "" {
+		return "app"
+	}
+	parts := strings.Split(p, "/")
+	return parts[len(parts)-1]
+}
+
+func discoverZipDockerfileContexts(zipURL, zipUser, zipPass string) ([]string, error) {
+	tmp, err := os.CreateTemp("", "runner-zip-*.zip")
+	if err != nil {
+		return nil, err
+	}
+	tmpPath := tmp.Name()
+	tmp.Close()
+	defer os.Remove(tmpPath)
+
+	req, err := http.NewRequest(http.MethodGet, zipURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	if zipUser != "" || zipPass != "" {
+		req.SetBasicAuth(zipUser, zipPass)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("zip fetch failed: %s", resp.Status)
+	}
+
+	out, err := os.Create(tmpPath)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := io.Copy(out, resp.Body); err != nil {
+		out.Close()
+		return nil, err
+	}
+	if err := out.Close(); err != nil {
+		return nil, err
+	}
+
+	zr, err := zip.OpenReader(tmpPath)
+	if err != nil {
+		return nil, err
+	}
+	defer zr.Close()
+
+	seen := map[string]bool{}
+	contexts := make([]string, 0, 4)
+	for _, f := range zr.File {
+		if f.FileInfo().IsDir() {
+			continue
+		}
+		name := strings.ReplaceAll(strings.TrimSpace(f.Name), "\\", "/")
+		if name == "" {
+			continue
+		}
+		if !strings.EqualFold(path.Base(name), "Dockerfile") {
+			continue
+		}
+		dir := path.Dir(name)
+		ctx := "."
+		if dir != "." {
+			ctx = strings.TrimPrefix(path.Clean(dir), "./")
+		}
+		if !seen[ctx] {
+			seen[ctx] = true
+			contexts = append(contexts, ctx)
+		}
+	}
+	return contexts, nil
 }
 
 func sanitizeZipFilename(name string) (string, error) {

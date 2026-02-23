@@ -202,6 +202,7 @@ Notlar:
 - `apps[].project` bossa `apps[].app_name` kullanilir.
 - `apps[].tag` bossa `image.tag` (yoksa `latest`) kullanilir.
 - `context_sub_path` verilirse build context o alt klasor olur.
+- `source.type=zip` icin `apps[]` ve `source.context_sub_path` verilmezse, ZIP icindeki tum Dockerfile konumlari otomatik taranir ve her Dockerfile icin otomatik app olusturulur (multi-app run).
 
 ## Dependency Orchestration (Redis / SQL)
 
