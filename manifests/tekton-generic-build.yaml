@@ -1,0 +1,195 @@
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: build-and-push-generic
+  namespace: tekton-pipelines
+spec:
+  params:
+    - name: source-type
+      type: string
+      description: "git, local, or zip"
+    - name: repo-url
+      type: string
+      default: ""
+    - name: revision
+      type: string
+      default: main
+    - name: project
+      type: string
+      description: "Harbor project name (lowercase will be used)"
+    - name: registry
+      type: string
+      default: lenovo:8443
+    - name: tag
+      type: string
+      default: latest
+    - name: local-path
+      type: string
+      default: ""
+    - name: zip-url
+      type: string
+      default: ""
+    - name: zip-username
+      type: string
+      default: ""
+    - name: zip-password
+      type: string
+      default: ""
+  workspaces:
+    - name: source
+    - name: git-credentials
+      optional: true
+    - name: local-source
+      optional: true
+  steps:
+    - name: prepare-git
+      image: lenovo:8443/library/alpine-git:2.45.2
+      script: |
+        set -e
+        if [ "$(params.source-type)" != "git" ]; then
+          exit 0
+        fi
+        rm -rf /workspace/source/*
+        if [ -z "$(params.repo-url)" ]; then
+          echo "repo-url param is required for git"
+          exit 1
+        fi
+        url="$(params.repo-url)"
+        user=""
+        token=""
+        if [ -f /workspace/git-credentials/username ]; then
+          user=$(cat /workspace/git-credentials/username)
+        fi
+        if [ -f /workspace/git-credentials/token ]; then
+          token=$(cat /workspace/git-credentials/token)
+        fi
+        if [ -n "$user" ] && [ -n "$token" ]; then
+          authed_url="${url/https:\/\//https://${user}:${token}@}"
+        else
+          authed_url="$url"
+        fi
+        ref="$(params.revision)"
+        ref="${ref#refs/heads/}"
+        git clone --depth 1 --branch "$ref" "$authed_url" /workspace/source
+    - name: prepare-local
+      image: lenovo:8443/library/alpine-git:2.45.2
+      script: |
+        set -e
+        if [ "$(params.source-type)" != "local" ]; then
+          exit 0
+        fi
+        rm -rf /workspace/source/*
+        if [ -z "$(params.local-path)" ]; then
+          echo "local-path param is required for local"
+          exit 1
+        fi
+        src="/workspace/local-source/$(params.local-path)"
+        if [ ! -d "$src" ]; then
+          echo "local path not found: $src"
+          exit 1
+        fi
+        cp -a "$src/." /workspace/source/
+    - name: prepare-zip
+      image: lenovo:8443/library/python:3.12-alpine
+      script: |
+        set -e
+        if [ "$(params.source-type)" != "zip" ]; then
+          exit 0
+        fi
+        if [ -z "$(params.zip-url)" ]; then
+          echo "zip-url param is required for zip"
+          exit 1
+        fi
+        rm -rf /workspace/source/*
+        python - <<'PY'
+        import os, urllib.request, zipfile, base64
+
+        url = os.environ.get("ZIP_URL")
+        user = os.environ.get("ZIP_USER")
+        pw = os.environ.get("ZIP_PASS")
+
+        req = urllib.request.Request(url)
+        if user and pw:
+            token = base64.b64encode(f"{user}:{pw}".encode()).decode()
+            req.add_header("Authorization", f"Basic {token}")
+
+        with urllib.request.urlopen(req) as r:
+            data = r.read()
+
+        zip_path = "/tmp/src.zip"
+        with open(zip_path, "wb") as f:
+            f.write(data)
+
+        dst = "/workspace/source"
+        with zipfile.ZipFile(zip_path, "r") as z:
+            z.extractall(dst)
+        PY
+        # Auto-detect Dockerfile location
+        found="$(find /workspace/source -type f -name Dockerfile | head -n 2)"
+        count="$(printf '%s\n' "$found" | grep -c . || true)"
+        if [ "$count" -eq 0 ]; then
+          echo "Dockerfile not found in zip"
+          exit 1
+        fi
+        if [ "$count" -gt 1 ]; then
+          echo "Multiple Dockerfile files found; please provide a zip with a single Dockerfile"
+          printf '%s\n' "$found"
+          exit 1
+        fi
+        df="$(printf '%s\n' "$found" | head -n 1)"
+        ctx="$(dirname "$df")"
+        echo "$df" > /workspace/source/.dockerfile-path
+        echo "$ctx" > /workspace/source/.context-path
+      env:
+        - name: ZIP_URL
+          value: $(params.zip-url)
+        - name: ZIP_USER
+          value: $(params.zip-username)
+        - name: ZIP_PASS
+          value: $(params.zip-password)
+    - name: create-project
+      image: lenovo:8443/library/curl:8.12.1
+      script: |
+        set -e
+        proj="$(params.project)"
+        proj="$(printf '%s' "$proj" | tr '[:upper:]' '[:lower:]')"
+        code=$(curl -sk -o /dev/null -w "%{http_code}" \
+          -u admin:Harbor12345 \
+          -H 'Content-Type: application/json' \
+          -d '{"project_name":"'"$proj"'","metadata":{"public":"true"}}' \
+          https://lenovo:8443/api/v2.0/projects || true)
+        if [ "$code" != "201" ] && [ "$code" != "409" ]; then
+          echo "Failed to create project. HTTP $code"
+          exit 1
+        fi
+    - name: build
+      image: lenovo:8443/library/kaniko-executor:debug
+      script: |
+        set -e
+        dockerfile="/workspace/source/Dockerfile"
+        context="/workspace/source"
+        if [ -f /workspace/source/.dockerfile-path ]; then
+          dockerfile="$(cat /workspace/source/.dockerfile-path)"
+        fi
+        if [ -f /workspace/source/.context-path ]; then
+          context="$(cat /workspace/source/.context-path)"
+        fi
+        proj="$(params.project)"
+        proj="$(printf '%s' "$proj" | tr '[:upper:]' '[:lower:]')"
+        dest="$(params.registry)/${proj}/${proj}:$(params.tag)"
+        /kaniko/executor \
+          --dockerfile="$dockerfile" \
+          --context="$context" \
+          --destination="${dest}" \
+          --skip-tls-verify \
+          --skip-tls-verify-pull
+      volumeMounts:
+        - name: docker-config
+          mountPath: /kaniko/.docker
+  volumes:
+    - name: docker-config
+      secret:
+        secretName: harbor-creds
+        items:
+          - key: .dockerconfigjson
+            path: config.json

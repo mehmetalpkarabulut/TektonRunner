@@ -1,0 +1,16 @@
+{
+  "namespace": "tekton-pipelines",
+  "task": "build-and-push-generic",
+  "source": {
+    "type": "git",
+    "repo_url": "https://github.com/mehmetalpkarabulut/Dev",
+    "revision": "main",
+    "git_username": "YOUR_GIT_USER",
+    "git_token": "YOUR_GIT_TOKEN"
+  },
+  "image": {
+    "project": "dev",
+    "tag": "latest",
+    "registry": "lenovo:8443"
+  }
+}

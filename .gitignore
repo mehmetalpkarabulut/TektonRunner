@@ -1,0 +1,17 @@
+# Binaries / logs
+*.log
+*.out
+*.tmp
+
+# Tekton runner local build artifacts
+tools/tekton-runner/tekton-runner
+tools/tekton-runner/runner.log
+
+# Runtime artifacts
+port-map.json
+kubeconfigs/
+
+# OS/editor
+.DS_Store
+.vscode/
+.idea/

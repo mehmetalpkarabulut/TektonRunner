@@ -1,0 +1,269 @@
+<!doctype html>
+<html lang="tr">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Tekton Runner Console</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/ui/styles.css?v=20260218-3" />
+  </head>
+  <body>
+    <div class="orb orb-a"></div>
+    <div class="orb orb-b"></div>
+    <div class="grid-noise"></div>
+
+    <header class="topbar">
+      <div class="brand">
+        <div class="logo">TR</div>
+        <div>
+          <div class="kicker">Tekton Runner</div>
+          <div class="title">Build & Deploy Console</div>
+          <div class="subtitle">Workspace odakli kontrol paneli</div>
+        </div>
+      </div>
+      <div class="statusbar">
+        <div class="pill" id="healthBadge">HEALTH: ?</div>
+        <button class="btn accent" id="healthBtn" type="button">Health Check</button>
+        <div class="meta">Runner: <span id="runnerBase">Same origin</span></div>
+      </div>
+    </header>
+
+    <div class="shell">
+      <aside class="sidebar">
+        <div class="side-card">
+          <div class="section-title">Quick Actions</div>
+          <button class="btn ghost" id="sampleGit" type="button">Git Sample</button>
+          <button class="btn ghost" id="sampleZip" type="button">ZIP Sample</button>
+          <button class="btn ghost" id="sampleLocal" type="button">Local Sample</button>
+        </div>
+        <div class="side-card">
+          <div class="section-title">Shortcuts</div>
+          <div class="shortcut">Swagger: <span> /docs</span></div>
+          <div class="shortcut">OpenAPI: <span> /openapi.json</span></div>
+          <div class="shortcut">UI: <span> /ui/</span></div>
+        </div>
+      </aside>
+
+      <main class="main">
+        <section class="card wide">
+          <div class="card-header">
+            <div>
+              <div class="card-title">Workspaces</div>
+              <div class="card-sub">Secili workspace ile detail yan yana</div>
+            </div>
+            <button class="btn ghost" id="wsRefresh" type="button">Refresh</button>
+          </div>
+          <div class="split-panel">
+            <div class="workspace-grid" id="workspaceList"></div>
+            <div id="workspaceDetail" class="workspace-detail">
+              <div class="empty-state">Bir workspace secin.</div>
+            </div>
+          </div>
+        </section>
+
+        <section class="card wide">
+          <div class="card-header">
+            <div>
+              <div class="card-title">Git Build</div>
+              <div class="card-sub">Repo kaynakli build</div>
+            </div>
+            <button class="btn accent" id="runGitBtn" type="button">Create Git TaskRun</button>
+          </div>
+          <div class="form-grid">
+            <div class="form-field"><label>App Name</label><input id="gitAppName" placeholder="demoapp" /></div>
+            <div class="form-field"><label>Workspace</label><input id="gitWorkspace" placeholder="ws-demo" /></div>
+            <div class="form-field"><label>Repo URL</label><input id="gitRepoUrl" placeholder="https://github.com/org/repo" /></div>
+            <div class="form-field"><label>Revision</label><input id="gitRevision" placeholder="main" /></div>
+            <div class="form-field"><label>Git Username</label><input id="gitUser" placeholder="optional" /></div>
+            <div class="form-field"><label>Git Token</label><input id="gitToken" placeholder="optional" /></div>
+            <div class="form-field"><label>Image Project</label><input id="gitImageProject" placeholder="demoapp" /></div>
+            <div class="form-field"><label>Image Tag</label><input id="gitImageTag" placeholder="latest" /></div>
+            <div class="form-field"><label>Registry</label><input id="gitRegistry" placeholder="lenovo:8443" /></div>
+            <div class="form-field"><label>Container Port</label><input id="gitPort" type="number" min="1" value="3000" /></div>
+            <div class="form-field">
+              <label>Dependency Type</label>
+              <select id="gitDepType">
+                <option value="none">none</option>
+                <option value="redis">redis</option>
+                <option value="sql">sql</option>
+                <option value="both">both</option>
+              </select>
+            </div>
+            <div class="form-field" id="gitSqlDbWrap"><label>SQL Database (required for sql/both)</label><input id="gitSqlDb" value="AppDb" /></div>
+            <div class="form-field" id="gitSqlPassWrap"><label>SQL Password (required for sql/both)</label><input id="gitSqlPass" value="StrongPass_123!" /></div>
+            <div class="form-field">
+              <label>Migration Enabled</label>
+              <select id="gitMigrationEnabled">
+                <option value="false">false</option>
+                <option value="true">true</option>
+              </select>
+            </div>
+            <div class="form-field" id="gitMigrationCmdWrap"><label>Migration Command (csv, required if enabled)</label><input id="gitMigrationCmd" value="dotnet,ef,database,update" /></div>
+            <div class="form-field" id="gitMigrationArgsWrap"><label>Migration Args (csv)</label><input id="gitMigrationArgs" placeholder="--project,src/App.csproj" /></div>
+          </div>
+          <details class="advanced-box">
+            <summary>Advanced (optional overrides)</summary>
+            <div class="form-grid advanced-grid">
+              <div class="form-field"><label>Redis Image</label><input id="gitRedisImage" value="lenovo:8443/library/redis:7-alpine" /></div>
+              <div class="form-field"><label>Redis Service</label><input id="gitRedisService" value="redis" /></div>
+              <div class="form-field"><label>Redis Port</label><input id="gitRedisPort" type="number" min="1" value="6379" /></div>
+              <div class="form-field"><label>Redis Env Key</label><input id="gitRedisEnv" value="ConnectionStrings__Redis" /></div>
+              <div class="form-field"><label>SQL Image</label><input id="gitSqlImage" value="lenovo:8443/library/mssql-server:2022-latest" /></div>
+              <div class="form-field"><label>SQL Service</label><input id="gitSqlService" value="sql" /></div>
+              <div class="form-field"><label>SQL Port</label><input id="gitSqlPort" type="number" min="1" value="1433" /></div>
+              <div class="form-field"><label>SQL Username</label><input id="gitSqlUser" value="sa" /></div>
+              <div class="form-field"><label>SQL Env Key</label><input id="gitSqlEnv" value="ConnectionStrings__DefaultConnection" /></div>
+              <div class="form-field"><label>Migration Image</label><input id="gitMigrationImage" value="lenovo:8443/library/dotnet-sdk:8.0" /></div>
+              <div class="form-field"><label>Migration Env Key</label><input id="gitMigrationEnv" value="ConnectionStrings__DefaultConnection" /></div>
+            </div>
+          </details>
+        </section>
+
+        <section class="card wide">
+          <div class="card-header">
+            <div>
+              <div class="card-title">ZIP Build</div>
+              <div class="card-sub">Zip paket kaynakli build</div>
+            </div>
+            <button class="btn accent" id="runZipBtn" type="button">Create ZIP TaskRun</button>
+          </div>
+          <div class="form-grid">
+            <div class="form-field"><label>App Name</label><input id="zipAppName" placeholder="demoapp" /></div>
+            <div class="form-field"><label>Workspace</label><input id="zipWorkspace" placeholder="ws-demo" /></div>
+            <div class="form-field"><label>Zip URL</label><input id="zipUrl" placeholder="http://.../app.zip" /></div>
+            <div class="form-field"><label>Image Project</label><input id="zipImageProject" placeholder="demoapp" /></div>
+            <div class="form-field"><label>Image Tag</label><input id="zipImageTag" placeholder="latest" /></div>
+            <div class="form-field"><label>Registry</label><input id="zipRegistry" placeholder="lenovo:8443" /></div>
+            <div class="form-field"><label>Container Port</label><input id="zipPort" type="number" min="1" value="8080" /></div>
+            <div class="form-field">
+              <label>Dependency Type</label>
+              <select id="zipDepType">
+                <option value="none">none</option>
+                <option value="redis">redis</option>
+                <option value="sql">sql</option>
+                <option value="both">both</option>
+              </select>
+            </div>
+            <div class="form-field" id="zipSqlDbWrap"><label>SQL Database (required for sql/both)</label><input id="zipSqlDb" value="AppDb" /></div>
+            <div class="form-field" id="zipSqlPassWrap"><label>SQL Password (required for sql/both)</label><input id="zipSqlPass" value="StrongPass_123!" /></div>
+            <div class="form-field">
+              <label>Migration Enabled</label>
+              <select id="zipMigrationEnabled">
+                <option value="false">false</option>
+                <option value="true">true</option>
+              </select>
+            </div>
+            <div class="form-field" id="zipMigrationCmdWrap"><label>Migration Command (csv, required if enabled)</label><input id="zipMigrationCmd" value="dotnet,ef,database,update" /></div>
+            <div class="form-field" id="zipMigrationArgsWrap"><label>Migration Args (csv)</label><input id="zipMigrationArgs" placeholder="--project,src/App.csproj" /></div>
+          </div>
+          <details class="advanced-box">
+            <summary>Advanced (optional overrides)</summary>
+            <div class="form-grid advanced-grid">
+              <div class="form-field"><label>Redis Image</label><input id="zipRedisImage" value="lenovo:8443/library/redis:7-alpine" /></div>
+              <div class="form-field"><label>Redis Service</label><input id="zipRedisService" value="redis" /></div>
+              <div class="form-field"><label>Redis Port</label><input id="zipRedisPort" type="number" min="1" value="6379" /></div>
+              <div class="form-field"><label>Redis Env Key</label><input id="zipRedisEnv" value="ConnectionStrings__Redis" /></div>
+              <div class="form-field"><label>SQL Image</label><input id="zipSqlImage" value="lenovo:8443/library/mssql-server:2022-latest" /></div>
+              <div class="form-field"><label>SQL Service</label><input id="zipSqlService" value="sql" /></div>
+              <div class="form-field"><label>SQL Port</label><input id="zipSqlPort" type="number" min="1" value="1433" /></div>
+              <div class="form-field"><label>SQL Username</label><input id="zipSqlUser" value="sa" /></div>
+              <div class="form-field"><label>SQL Env Key</label><input id="zipSqlEnv" value="ConnectionStrings__DefaultConnection" /></div>
+              <div class="form-field"><label>Migration Image</label><input id="zipMigrationImage" value="lenovo:8443/library/dotnet-sdk:8.0" /></div>
+              <div class="form-field"><label>Migration Env Key</label><input id="zipMigrationEnv" value="ConnectionStrings__DefaultConnection" /></div>
+            </div>
+          </details>
+        </section>
+
+        <section class="card wide">
+          <div class="card-header">
+            <div>
+              <div class="card-title">Local Build</div>
+              <div class="card-sub">Local path kaynakli build</div>
+            </div>
+            <button class="btn accent" id="runLocalBtn" type="button">Create Local TaskRun</button>
+          </div>
+          <div class="form-grid">
+            <div class="form-field"><label>App Name</label><input id="localAppName" placeholder="demoapp" /></div>
+            <div class="form-field"><label>Workspace</label><input id="localWorkspace" placeholder="ws-demo" /></div>
+            <div class="form-field"><label>Local Path</label><input id="localPath" placeholder="/mnt/projects/app" /></div>
+            <div class="form-field"><label>Image Project</label><input id="localImageProject" placeholder="demoapp" /></div>
+            <div class="form-field"><label>Image Tag</label><input id="localImageTag" placeholder="latest" /></div>
+            <div class="form-field"><label>Registry</label><input id="localRegistry" placeholder="lenovo:8443" /></div>
+            <div class="form-field"><label>Container Port</label><input id="localPort" type="number" min="1" value="3000" /></div>
+            <div class="form-field">
+              <label>Dependency Type</label>
+              <select id="localDepType">
+                <option value="none">none</option>
+                <option value="redis">redis</option>
+                <option value="sql">sql</option>
+                <option value="both">both</option>
+              </select>
+            </div>
+            <div class="form-field" id="localSqlDbWrap"><label>SQL Database (required for sql/both)</label><input id="localSqlDb" value="AppDb" /></div>
+            <div class="form-field" id="localSqlPassWrap"><label>SQL Password (required for sql/both)</label><input id="localSqlPass" value="StrongPass_123!" /></div>
+            <div class="form-field">
+              <label>Migration Enabled</label>
+              <select id="localMigrationEnabled">
+                <option value="false">false</option>
+                <option value="true">true</option>
+              </select>
+            </div>
+            <div class="form-field" id="localMigrationCmdWrap"><label>Migration Command (csv, required if enabled)</label><input id="localMigrationCmd" value="dotnet,ef,database,update" /></div>
+            <div class="form-field" id="localMigrationArgsWrap"><label>Migration Args (csv)</label><input id="localMigrationArgs" placeholder="--project,src/App.csproj" /></div>
+          </div>
+          <details class="advanced-box">
+            <summary>Advanced (optional overrides)</summary>
+            <div class="form-grid advanced-grid">
+              <div class="form-field"><label>Redis Image</label><input id="localRedisImage" value="lenovo:8443/library/redis:7-alpine" /></div>
+              <div class="form-field"><label>Redis Service</label><input id="localRedisService" value="redis" /></div>
+              <div class="form-field"><label>Redis Port</label><input id="localRedisPort" type="number" min="1" value="6379" /></div>
+              <div class="form-field"><label>Redis Env Key</label><input id="localRedisEnv" value="ConnectionStrings__Redis" /></div>
+              <div class="form-field"><label>SQL Image</label><input id="localSqlImage" value="lenovo:8443/library/mssql-server:2022-latest" /></div>
+              <div class="form-field"><label>SQL Service</label><input id="localSqlService" value="sql" /></div>
+              <div class="form-field"><label>SQL Port</label><input id="localSqlPort" type="number" min="1" value="1433" /></div>
+              <div class="form-field"><label>SQL Username</label><input id="localSqlUser" value="sa" /></div>
+              <div class="form-field"><label>SQL Env Key</label><input id="localSqlEnv" value="ConnectionStrings__DefaultConnection" /></div>
+              <div class="form-field"><label>Migration Image</label><input id="localMigrationImage" value="lenovo:8443/library/dotnet-sdk:8.0" /></div>
+              <div class="form-field"><label>Migration Env Key</label><input id="localMigrationEnv" value="ConnectionStrings__DefaultConnection" /></div>
+            </div>
+          </details>
+        </section>
+
+        <section class="card wide">
+          <div class="card-header">
+            <div>
+              <div class="card-title">Console</div>
+              <div class="card-sub">Build tetiklendikten sonra loglar burada akar</div>
+            </div>
+            <button class="btn ghost" id="runRefresh" type="button">Refresh</button>
+          </div>
+          <div class="form-grid">
+            <div class="form-field"><label>TaskRun</label><input id="runTaskName" placeholder="build-and-push-run-xxxxx" /></div>
+            <div class="form-field"><label>Namespace</label><input id="runTaskNs" value="tekton-pipelines" /></div>
+            <div class="form-field"><label>Tail</label><input id="runTaskTail" type="number" min="200" value="2000" /></div>
+          </div>
+          <div class="run-status" id="runStatus">No TaskRun selected.</div>
+          <pre class="log-box" id="runLog"></pre>
+        </section>
+
+        <section class="card wide">
+          <div class="card-header">
+            <div>
+              <div class="card-title">Activity</div>
+              <div class="card-sub">Son islemler</div>
+            </div>
+            <button class="btn ghost" id="clearLog" type="button">Clear</button>
+          </div>
+          <div class="activity" id="activity"></div>
+        </section>
+      </main>
+    </div>
+
+    <script src="/ui/app.js?v=20260223-2"></script>
+  </body>
+</html>

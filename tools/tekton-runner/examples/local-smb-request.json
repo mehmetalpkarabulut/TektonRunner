@@ -1,0 +1,20 @@
+{
+  "namespace": "tekton-pipelines",
+  "task": "build-and-push-generic",
+  "source": {
+    "type": "local",
+    "local_path": "projeler/myapp",
+    "smb": {
+      "server": "fileserver.local",
+      "share": "projects",
+      "username": "SMB_USER",
+      "password": "SMB_PASS",
+      "size": "50Gi"
+    }
+  },
+  "image": {
+    "project": "myapp",
+    "tag": "latest",
+    "registry": "lenovo:8443"
+  }
+}
