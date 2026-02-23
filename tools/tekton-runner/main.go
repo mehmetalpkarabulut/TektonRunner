@@ -271,12 +271,15 @@ func deriveWorkspace(in Input) string {
 
 func normalizeContextSubDir(raw string) (string, error) {
 	p := strings.TrimSpace(strings.ReplaceAll(raw, "\\", "/"))
-	if p == "" || p == "." {
+	if p == "" {
 		return "", nil
 	}
 	p = path.Clean(p)
 	p = strings.TrimSpace(p)
-	if p == "." || p == "" {
+	if p == "." {
+		return ".", nil
+	}
+	if p == "" {
 		return "", nil
 	}
 	if strings.HasPrefix(p, "/") || p == ".." || strings.HasPrefix(p, "../") || strings.Contains(p, "/../") {
