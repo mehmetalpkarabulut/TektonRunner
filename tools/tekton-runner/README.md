@@ -113,6 +113,16 @@ API key ile:
 - ilgili TaskRun ham loglari
 - workspace pod/container ham loglari
 
+Kalici log arsivi:
+- timeline eventleri: `/home/beko/run-events.jsonl`
+- TaskRun ham log arsivi: `/home/beko/run-log-archive/<workspace>/<app>/taskrun/*.json`
+- container ham log arsivi: `/home/beko/run-log-archive/<workspace>/<app>/container/*.json`
+
+Davranis:
+- Canli log basarili okunursa arsive yazilir (`source=live`).
+- Canli log okunamazsa varsa arsivden donulur (`source=archive`).
+- `run_id` vermeseniz de `workspace+app` ile gecmis loglar okunabilir.
+
 Opsiyonel query parametreleri:
 - `include_taskrun=true|false`
 - `include_containers=true|false`

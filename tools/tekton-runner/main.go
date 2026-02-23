@@ -194,6 +194,8 @@ type TaskRunLogBlock struct {
 	Namespace string `json:"namespace"`
 	Logs      string `json:"logs,omitempty"`
 	Error     string `json:"error,omitempty"`
+	Source    string `json:"source,omitempty"`
+	Collected string `json:"collected_at,omitempty"`
 }
 
 type ContainerLogBlock struct {
@@ -201,6 +203,8 @@ type ContainerLogBlock struct {
 	Container string `json:"container"`
 	Logs      string `json:"logs,omitempty"`
 	Error     string `json:"error,omitempty"`
+	Source    string `json:"source,omitempty"`
+	Collected string `json:"collected_at,omitempty"`
 }
 
 type EventStore struct {
@@ -215,6 +219,8 @@ var serverKubeconfig string
 var serverState = &ServerState{endpoints: map[string]string{}}
 var portStore = &ExternalPortStore{path: "/home/beko/port-map.json"}
 var eventStore = &EventStore{path: "/home/beko/run-events.jsonl", maxKeep: 5000}
+var logArchiveRoot = "/home/beko/run-log-archive"
+var pathTokenRe = regexp.MustCompile(`[^a-zA-Z0-9._-]+`)
 
 type Forward struct {
 	Port int
@@ -739,8 +745,21 @@ func runServer(addr, apiKey string) {
 				b, err := getTaskRunLogs(ref.Namespace, ref.TaskRun, strconv.Itoa(tailRaw))
 				if err != nil {
 					ref.Error = err.Error()
+					archived, aerr := loadArchivedTaskRunLog(workspace, app, ref.Namespace, ref.TaskRun)
+					if aerr == nil && strings.TrimSpace(archived.Logs) != "" {
+						ref.Logs = archived.Logs
+						ref.Source = "archive"
+						ref.Collected = archived.Collected
+						ref.Error = ""
+						errors["taskrun_live_"+ref.TaskRun] = err.Error()
+					}
 				} else {
 					ref.Logs = string(b)
+					ref.Source = "live"
+					ref.Collected = time.Now().UTC().Format(time.RFC3339)
+					if aerr := archiveTaskRunLog(workspace, app, ref); aerr != nil {
+						errors["taskrun_archive_"+ref.TaskRun] = aerr.Error()
+					}
 				}
 				taskrunLogs = append(taskrunLogs, ref)
 			}
@@ -748,8 +767,34 @@ func runServer(addr, apiKey string) {
 		if includeContainers {
 			blocks, err := getWorkspaceContainerLogs(workspace, app, tailRaw)
 			if err != nil {
-				errors["container_logs"] = err.Error()
+				errors["container_logs_live"] = err.Error()
+				archived, aerr := loadArchivedContainerLogs(workspace, app)
+				if aerr != nil {
+					errors["container_logs_archive"] = aerr.Error()
+				} else {
+					containerLogs = archived
+				}
 			} else {
+				for i := range blocks {
+					if strings.TrimSpace(blocks[i].Logs) != "" {
+						blocks[i].Source = "live"
+						blocks[i].Collected = time.Now().UTC().Format(time.RFC3339)
+						if aerr := archiveContainerLog(workspace, app, blocks[i]); aerr != nil {
+							errors["container_archive_"+blocks[i].Pod+"_"+blocks[i].Container] = aerr.Error()
+						}
+						continue
+					}
+					if strings.TrimSpace(blocks[i].Error) != "" {
+						archived, aerr := loadArchivedContainerLog(workspace, app, blocks[i].Pod, blocks[i].Container)
+						if aerr == nil && strings.TrimSpace(archived.Logs) != "" {
+							blocks[i].Logs = archived.Logs
+							blocks[i].Source = "archive"
+							blocks[i].Collected = archived.Collected
+							blocks[i].Error = ""
+							errors["container_live_"+blocks[i].Pod+"_"+blocks[i].Container] = "served from archive"
+						}
+					}
+				}
 				containerLogs = blocks
 			}
 		}
@@ -1173,12 +1218,14 @@ func handleZipDeploy(in Input, taskRunName, runID string) error {
 		"namespace": ns,
 	})
 	if err := waitForTaskRun(ns, taskRunName, 45*time.Minute); err != nil {
+		captureAndArchiveTaskRunLogs(workspace, app, ns, taskRunName, 1200)
 		emitRunEvent(runID, workspace, app, "build", "failed", err.Error(), map[string]string{
 			"taskrun":   taskRunName,
 			"namespace": ns,
 		})
 		return err
 	}
+	captureAndArchiveTaskRunLogs(workspace, app, ns, taskRunName, 1200)
 	emitRunEvent(runID, workspace, app, "build", "succeeded", "TaskRun completed successfully", map[string]string{
 		"taskrun":   taskRunName,
 		"namespace": ns,
@@ -2348,6 +2395,193 @@ func parseBoolQuery(v string, def bool) bool {
 		return def
 	}
 	return v == "1" || v == "true" || v == "yes" || v == "on"
+}
+
+type archivedRawLog struct {
+	UpdatedAt string `json:"updated_at"`
+	Workspace string `json:"workspace"`
+	App       string `json:"app"`
+	Namespace string `json:"namespace,omitempty"`
+	TaskRun   string `json:"taskrun,omitempty"`
+	Pod       string `json:"pod,omitempty"`
+	Container string `json:"container,omitempty"`
+	Logs      string `json:"logs"`
+}
+
+func safePathToken(v string) string {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return "unknown"
+	}
+	out := pathTokenRe.ReplaceAllString(v, "_")
+	out = strings.Trim(out, "._-")
+	if out == "" {
+		return "unknown"
+	}
+	return out
+}
+
+func taskRunArchivePath(workspace, app, namespace, taskRun string) string {
+	return filepath.Join(
+		logArchiveRoot,
+		safePathToken(workspace),
+		safePathToken(app),
+		"taskrun",
+		safePathToken(namespace)+"__"+safePathToken(taskRun)+".json",
+	)
+}
+
+func containerArchivePath(workspace, app, pod, container string) string {
+	return filepath.Join(
+		logArchiveRoot,
+		safePathToken(workspace),
+		safePathToken(app),
+		"container",
+		safePathToken(pod)+"__"+safePathToken(container)+".json",
+	)
+}
+
+func writeArchiveFile(path string, rec archivedRawLog) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	b, err := json.MarshalIndent(rec, "", "  ")
+	if err != nil {
+		return err
+	}
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, b, 0o644); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
+}
+
+func readArchiveFile(path string) (archivedRawLog, error) {
+	var rec archivedRawLog
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return rec, err
+	}
+	if err := json.Unmarshal(b, &rec); err != nil {
+		return rec, err
+	}
+	return rec, nil
+}
+
+func archiveTaskRunLog(workspace, app string, block TaskRunLogBlock) error {
+	if strings.TrimSpace(block.TaskRun) == "" {
+		return fmt.Errorf("taskrun is empty")
+	}
+	if strings.TrimSpace(block.Logs) == "" {
+		return fmt.Errorf("taskrun logs are empty")
+	}
+	rec := archivedRawLog{
+		UpdatedAt: time.Now().UTC().Format(time.RFC3339),
+		Workspace: workspace,
+		App:       app,
+		Namespace: block.Namespace,
+		TaskRun:   block.TaskRun,
+		Logs:      block.Logs,
+	}
+	return writeArchiveFile(taskRunArchivePath(workspace, app, block.Namespace, block.TaskRun), rec)
+}
+
+func loadArchivedTaskRunLog(workspace, app, namespace, taskRun string) (TaskRunLogBlock, error) {
+	rec, err := readArchiveFile(taskRunArchivePath(workspace, app, namespace, taskRun))
+	if err != nil {
+		return TaskRunLogBlock{}, err
+	}
+	return TaskRunLogBlock{
+		TaskRun:   taskRun,
+		Namespace: namespace,
+		Logs:      rec.Logs,
+		Source:    "archive",
+		Collected: rec.UpdatedAt,
+	}, nil
+}
+
+func archiveContainerLog(workspace, app string, block ContainerLogBlock) error {
+	if strings.TrimSpace(block.Pod) == "" || strings.TrimSpace(block.Container) == "" {
+		return fmt.Errorf("pod/container is empty")
+	}
+	if strings.TrimSpace(block.Logs) == "" {
+		return fmt.Errorf("container logs are empty")
+	}
+	rec := archivedRawLog{
+		UpdatedAt: time.Now().UTC().Format(time.RFC3339),
+		Workspace: workspace,
+		App:       app,
+		Pod:       block.Pod,
+		Container: block.Container,
+		Logs:      block.Logs,
+	}
+	return writeArchiveFile(containerArchivePath(workspace, app, block.Pod, block.Container), rec)
+}
+
+func loadArchivedContainerLog(workspace, app, pod, container string) (ContainerLogBlock, error) {
+	rec, err := readArchiveFile(containerArchivePath(workspace, app, pod, container))
+	if err != nil {
+		return ContainerLogBlock{}, err
+	}
+	return ContainerLogBlock{
+		Pod:       pod,
+		Container: container,
+		Logs:      rec.Logs,
+		Source:    "archive",
+		Collected: rec.UpdatedAt,
+	}, nil
+}
+
+func loadArchivedContainerLogs(workspace, app string) ([]ContainerLogBlock, error) {
+	dir := filepath.Join(logArchiveRoot, safePathToken(workspace), safePathToken(app), "container")
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]ContainerLogBlock, 0, len(entries))
+	for _, ent := range entries {
+		if ent.IsDir() || !strings.HasSuffix(ent.Name(), ".json") {
+			continue
+		}
+		rec, err := readArchiveFile(filepath.Join(dir, ent.Name()))
+		if err != nil {
+			continue
+		}
+		if strings.TrimSpace(rec.Logs) == "" {
+			continue
+		}
+		out = append(out, ContainerLogBlock{
+			Pod:       rec.Pod,
+			Container: rec.Container,
+			Logs:      rec.Logs,
+			Source:    "archive",
+			Collected: rec.UpdatedAt,
+		})
+		if len(out) >= 100 {
+			break
+		}
+	}
+	return out, nil
+}
+
+func captureAndArchiveTaskRunLogs(workspace, app, namespace, taskRun string, tail int) {
+	if strings.TrimSpace(workspace) == "" || strings.TrimSpace(app) == "" || strings.TrimSpace(taskRun) == "" {
+		return
+	}
+	if tail <= 0 {
+		tail = 800
+	}
+	out, err := getTaskRunLogs(namespace, taskRun, strconv.Itoa(tail))
+	if err != nil || strings.TrimSpace(string(out)) == "" {
+		return
+	}
+	_ = archiveTaskRunLog(workspace, app, TaskRunLogBlock{
+		TaskRun:   taskRun,
+		Namespace: namespace,
+		Logs:      string(out),
+		Source:    "live",
+		Collected: time.Now().UTC().Format(time.RFC3339),
+	})
 }
 
 func extractTaskRuns(events []RunEvent) []TaskRunLogBlock {
