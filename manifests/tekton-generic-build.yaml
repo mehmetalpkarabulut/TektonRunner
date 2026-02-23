@@ -218,7 +218,9 @@ spec:
           --context="$context" \
           --destination="${dest}" \
           --skip-tls-verify \
-          --skip-tls-verify-pull
+          --skip-tls-verify-pull \
+          --ignore-path=/product_uuid \
+          --cleanup=false
       volumeMounts:
         - name: docker-config
           mountPath: /kaniko/.docker

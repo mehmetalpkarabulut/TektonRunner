@@ -1829,7 +1829,7 @@ func configureKindNode(clusterName string) error {
 	node := clusterName + "-control-plane"
 	// Ensure host mapping for Harbor name inside kind node.
 	// We pin lenovo to the node's default gateway so the mapping survives host IP changes.
-	cmd := exec.Command("docker", "exec", node, "sh", "-c", `gw="$(ip route | awk '/default/ {print $3; exit}')"; [ -n "$gw" ] || gw="172.18.0.1"; sed -i '/[[:space:]]lenovo$/d' /etc/hosts; echo "$gw lenovo" >> /etc/hosts`)
+	cmd := exec.Command("docker", "exec", node, "sh", "-c", `gw="$(ip route | awk '/default/ {print $3; exit}')"; [ -n "$gw" ] || gw="172.18.0.1"; if ! grep -qE "[[:space:]]lenovo$" /etc/hosts; then echo "$gw lenovo" >> /etc/hosts; fi`)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
