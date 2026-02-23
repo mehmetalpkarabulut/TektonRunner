@@ -254,6 +254,49 @@
         <section class="card wide">
           <div class="card-header">
             <div>
+              <div class="card-title">End-to-End Logs</div>
+              <div class="card-sub">Timeline + TaskRun + Container loglarini tek ekranda getirir</div>
+            </div>
+            <div>
+              <button class="btn ghost" id="e2eFillBtn" type="button">Fill From Selection</button>
+              <button class="btn accent" id="e2eFetchBtn" type="button">Fetch End-to-End Logs</button>
+            </div>
+          </div>
+          <div class="form-grid">
+            <div class="form-field"><label>Workspace</label><input id="e2eWorkspace" placeholder="ws-demo" /></div>
+            <div class="form-field"><label>App</label><input id="e2eApp" placeholder="demoapp" /></div>
+            <div class="form-field"><label>Run ID (optional)</label><input id="e2eRunId" placeholder="20260223T...-abcd" /></div>
+            <div class="form-field"><label>Event Limit</label><input id="e2eLimit" type="number" min="1" max="5000" value="200" /></div>
+            <div class="form-field"><label>Raw Tail</label><input id="e2eTailRaw" type="number" min="20" max="5000" value="300" /></div>
+            <div class="form-field">
+              <label>Format</label>
+              <select id="e2eFormat">
+                <option value="text">text</option>
+                <option value="json">json</option>
+              </select>
+            </div>
+            <div class="form-field">
+              <label>Include TaskRun Logs</label>
+              <select id="e2eIncludeTaskrun">
+                <option value="true">true</option>
+                <option value="false">false</option>
+              </select>
+            </div>
+            <div class="form-field">
+              <label>Include Container Logs</label>
+              <select id="e2eIncludeContainers">
+                <option value="true">true</option>
+                <option value="false">false</option>
+              </select>
+            </div>
+          </div>
+          <div class="run-status" id="e2eStatus">No query yet.</div>
+          <pre class="log-box" id="e2eLog"></pre>
+        </section>
+
+        <section class="card wide">
+          <div class="card-header">
+            <div>
               <div class="card-title">Activity</div>
               <div class="card-sub">Son islemler</div>
             </div>
@@ -264,6 +307,6 @@
       </main>
     </div>
 
-    <script src="/ui/app.js?v=20260223-2"></script>
+    <script src="/ui/app.js?v=20260223-3"></script>
   </body>
 </html>

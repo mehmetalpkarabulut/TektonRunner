@@ -7,6 +7,16 @@ const runLogEl = document.getElementById("runLog");
 const runTaskNameEl = document.getElementById("runTaskName");
 const runTaskNsEl = document.getElementById("runTaskNs");
 const runTaskTailEl = document.getElementById("runTaskTail");
+const e2eWorkspaceEl = document.getElementById("e2eWorkspace");
+const e2eAppEl = document.getElementById("e2eApp");
+const e2eRunIdEl = document.getElementById("e2eRunId");
+const e2eLimitEl = document.getElementById("e2eLimit");
+const e2eTailRawEl = document.getElementById("e2eTailRaw");
+const e2eFormatEl = document.getElementById("e2eFormat");
+const e2eIncludeTaskrunEl = document.getElementById("e2eIncludeTaskrun");
+const e2eIncludeContainersEl = document.getElementById("e2eIncludeContainers");
+const e2eStatusEl = document.getElementById("e2eStatus");
+const e2eLogEl = document.getElementById("e2eLog");
 
 let currentWorkspace = null;
 let currentApp = null;
@@ -31,6 +41,7 @@ let hostInfo = { host_ip: "" };
 let externalMap = [];
 let externalInFlight = {};
 let externalDraft = {};
+let lastRunId = "";
 
 function addActivity(entry) {
   activityCache.unshift(entry);
@@ -146,6 +157,79 @@ async function refreshRunStatus(quiet = false) {
 async function refreshRunLogs(quiet = false) {
   if (!runState.name || !runLogEl) return;
   startRunStream();
+}
+
+function syncE2EInputs() {
+  if (e2eWorkspaceEl && currentWorkspace) e2eWorkspaceEl.value = currentWorkspace;
+  if (e2eAppEl && currentApp) e2eAppEl.value = currentApp;
+  if (e2eRunIdEl && lastRunId) e2eRunIdEl.value = lastRunId;
+}
+
+function buildE2ELogsEndpoint() {
+  const workspace = e2eWorkspaceEl?.value?.trim() || "";
+  const app = e2eAppEl?.value?.trim() || "";
+  const runId = e2eRunIdEl?.value?.trim() || "";
+  const limit = e2eLimitEl?.value?.trim() || "200";
+  const tailRaw = e2eTailRawEl?.value?.trim() || "300";
+  const format = e2eFormatEl?.value || "text";
+  const includeTaskrun = e2eIncludeTaskrunEl?.value || "true";
+  const includeContainers = e2eIncludeContainersEl?.value || "true";
+  if (!workspace) {
+    throw new Error("Workspace zorunlu.");
+  }
+  const q = new URLSearchParams();
+  q.set("workspace", workspace);
+  if (app) q.set("app", app);
+  if (runId) q.set("run_id", runId);
+  q.set("limit", limit);
+  q.set("tail_raw", tailRaw);
+  q.set("format", format);
+  q.set("include_taskrun", includeTaskrun);
+  q.set("include_containers", includeContainers);
+  return `/run/logs?${q.toString()}`;
+}
+
+async function fetchE2ELogs() {
+  if (!e2eLogEl || !e2eStatusEl) return;
+  let endpoint = "";
+  try {
+    endpoint = buildE2ELogsEndpoint();
+  } catch (err) {
+    e2eStatusEl.textContent = String(err.message || err);
+    e2eLogEl.textContent = "";
+    addActivity({ method: "UI", endpoint: "run/logs/validate", status: 400, message: String(err.message || err) });
+    return;
+  }
+  e2eStatusEl.textContent = "Loading...";
+  e2eLogEl.textContent = "Fetching logs...";
+  const res = await fetch(endpoint);
+  const contentType = res.headers.get("content-type") || "";
+  if (contentType.includes("application/json")) {
+    const body = await res.json();
+    if (res.ok) {
+      e2eStatusEl.textContent = `OK (${body.count || 0} events)`;
+      e2eLogEl.textContent = JSON.stringify(body, null, 2);
+    } else {
+      e2eStatusEl.textContent = `Error (${res.status})`;
+      e2eLogEl.textContent = JSON.stringify(body, null, 2);
+    }
+  } else {
+    const text = await res.text();
+    if (res.ok) {
+      e2eStatusEl.textContent = "OK";
+      e2eLogEl.textContent = text || "(empty)";
+    } else {
+      e2eStatusEl.textContent = `Error (${res.status})`;
+      e2eLogEl.textContent = text || "request failed";
+    }
+  }
+  addActivity({
+    method: "GET",
+    endpoint: "/run/logs",
+    status: res.status,
+    message: res.ok ? "End-to-end logs fetched" : "End-to-end logs failed"
+  });
+  e2eLogEl.scrollTop = e2eLogEl.scrollHeight;
 }
 
 function appendLogDelta(newText) {
@@ -374,6 +458,7 @@ function startWorkspacePoll(ws) {
 function setCurrentWorkspace(ws) {
   currentWorkspace = ws;
   currentApp = null;
+  syncE2EInputs();
   renderWorkspaceDetail();
   refreshWorkspaceStatus(ws, true);
   startWorkspacePoll(ws);
@@ -382,6 +467,7 @@ function setCurrentWorkspace(ws) {
 
 function setCurrentApp(app) {
   currentApp = app;
+  syncE2EInputs();
   renderWorkspaceDetail();
 }
 
@@ -1345,7 +1431,11 @@ async function submitRun(payload) {
     body: JSON.stringify(payload)
   });
   if (res.status === 202 && res.body?.taskrun) {
+    lastRunId = res.body?.run_id || "";
     setRunContext(res.body.taskrun, res.body.namespace);
+    if (e2eWorkspaceEl && res.body?.workspace) e2eWorkspaceEl.value = res.body.workspace;
+    if (e2eAppEl && res.body?.app) e2eAppEl.value = res.body.app;
+    if (e2eRunIdEl && res.body?.run_id) e2eRunIdEl.value = res.body.run_id;
     if (runLogEl) {
       runLogEl.textContent = "Loglar geliyor...";
       runLogEl.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -1406,6 +1496,13 @@ document.getElementById("runRefresh").onclick = async () => {
   await refreshRunStatus();
   await refreshRunLogs();
 };
+document.getElementById("e2eFillBtn").onclick = () => {
+  syncE2EInputs();
+  if (e2eStatusEl) e2eStatusEl.textContent = "Form filled from selection.";
+};
+document.getElementById("e2eFetchBtn").onclick = async () => {
+  await fetchE2ELogs();
+};
 
 document.getElementById("gitDepType").onchange = updateGitDependencyVisibility;
 document.getElementById("gitMigrationEnabled").onchange = updateGitDependencyVisibility;
@@ -1421,3 +1518,4 @@ healthCheck();
 loadHostInfo();
 loadExternalMap();
 refreshWorkspaces();
+syncE2EInputs();
