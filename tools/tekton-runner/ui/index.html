@@ -255,7 +255,7 @@
           <div class="card-header">
             <div>
               <div class="card-title">End-to-End Logs</div>
-              <div class="card-sub">Timeline + TaskRun + Container loglarini tek ekranda getirir</div>
+              <div class="card-sub">Timeline + TaskRun + Container loglarini tek ekranda getirir. Run ID bos ise secili workspace+app icin en guncel akis kullanilir.</div>
             </div>
             <div>
               <button class="btn ghost" id="e2eFillBtn" type="button">Fill From Selection</button>
@@ -265,7 +265,7 @@
           <div class="form-grid">
             <div class="form-field"><label>Workspace</label><input id="e2eWorkspace" placeholder="ws-demo" /></div>
             <div class="form-field"><label>App</label><input id="e2eApp" placeholder="demoapp" /></div>
-            <div class="form-field"><label>Run ID (optional)</label><input id="e2eRunId" placeholder="20260223T...-abcd" /></div>
+            <div class="form-field"><label>Run ID (opsiyonel, bos birakilabilir)</label><input id="e2eRunId" placeholder="Bos birak: son run kullanilir" /></div>
             <div class="form-field"><label>Event Limit</label><input id="e2eLimit" type="number" min="1" max="5000" value="200" /></div>
             <div class="form-field"><label>Raw Tail</label><input id="e2eTailRaw" type="number" min="20" max="5000" value="300" /></div>
             <div class="form-field">
