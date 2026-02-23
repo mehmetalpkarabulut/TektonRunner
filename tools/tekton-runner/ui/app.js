@@ -1092,7 +1092,6 @@ function buildZipPayload() {
   const appName = document.getElementById("zipAppName").value.trim();
   const workspace = document.getElementById("zipWorkspace").value.trim();
   const zipUrl = document.getElementById("zipUrl").value.trim();
-  const contextSubPath = document.getElementById("zipContextSubPath").value.trim();
   const project = document.getElementById("zipImageProject").value.trim();
   const tag = document.getElementById("zipImageTag").value.trim();
   const registry = document.getElementById("zipRegistry").value.trim();
@@ -1109,7 +1108,6 @@ function buildZipPayload() {
     },
     deploy: { container_port: port }
   };
-  if (contextSubPath) payload.source.context_sub_path = contextSubPath;
   const dep = buildDependencyPayload("zip");
   const depType = dep?.type || "none";
   if (dep) payload.dependency = dep;
@@ -1180,7 +1178,6 @@ function fillZipForm(sample) {
   document.getElementById("zipAppName").value = sample.app_name;
   document.getElementById("zipWorkspace").value = sample.workspace;
   document.getElementById("zipUrl").value = sample.source.zip_url || "";
-  document.getElementById("zipContextSubPath").value = sample.source.context_sub_path || "";
   document.getElementById("zipImageProject").value = sample.image.project;
   document.getElementById("zipImageTag").value = sample.image.tag;
   document.getElementById("zipRegistry").value = sample.image.registry;
@@ -1343,8 +1340,7 @@ const sampleZip = {
   workspace: "ws-demo",
   source: {
     type: "zip",
-    zip_url: "http://zip-server.tekton-pipelines.svc.cluster.local:8080/app.zip",
-    context_sub_path: "."
+    zip_url: "http://zip-server.tekton-pipelines.svc.cluster.local:8080/app.zip"
   },
   image: {
     project: "demoapp",
