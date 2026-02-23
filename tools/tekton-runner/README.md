@@ -142,6 +142,47 @@ Opsiyonel query parametreleri:
 curl -s "http://<host>:8088/run/logs?workspace=ws-demo&app=demoapp&run_id=<RUN_ID>&format=text"
 ```
 
+### Multi-App (tek run, birden fazla pod)
+
+`apps[]` ile ayni kaynak icinden birden fazla uygulama build+deploy edilebilir.
+Her app icin ayri TaskRun olusur, deploy asamasinda her biri ayri Deployment/Service (ayri pod) olarak ayaga kalkar.
+
+Ornek:
+
+```json
+{
+  "workspace": "ws-suite",
+  "source": {
+    "type": "zip",
+    "zip_url": "http://10.0.0.10/my-suite.zip"
+  },
+  "image": {
+    "registry": "lenovo:8443",
+    "tag": "latest"
+  },
+  "apps": [
+    {
+      "app_name": "memo-api",
+      "project": "memo-api",
+      "container_port": 8080,
+      "context_sub_path": "backend"
+    },
+    {
+      "app_name": "memo-ui",
+      "project": "memo-ui",
+      "container_port": 80,
+      "context_sub_path": "ui"
+    }
+  ]
+}
+```
+
+Notlar:
+- `apps[]` verildiginde `app_name` ve `image.project` zorunlu degildir.
+- `apps[].project` bossa `apps[].app_name` kullanilir.
+- `apps[].tag` bossa `image.tag` (yoksa `latest`) kullanilir.
+- `context_sub_path` verilirse build context o alt klasor olur.
+
 ## Dependency Orchestration (Redis / SQL)
 
 `/run` isteginde `dependency` alani ile workspace icinde ek servis ayaga kaldirilabilir.

@@ -35,6 +35,9 @@ spec:
     - name: zip-password
       type: string
       default: ""
+    - name: context-sub-path
+      type: string
+      default: ""
   workspaces:
     - name: source
     - name: git-credentials
@@ -124,20 +127,37 @@ spec:
         with zipfile.ZipFile(zip_path, "r") as z:
             z.extractall(dst)
         PY
-        # Auto-detect Dockerfile location
-        found="$(find /workspace/source -type f -name Dockerfile | head -n 2)"
-        count="$(printf '%s\n' "$found" | grep -c . || true)"
-        if [ "$count" -eq 0 ]; then
-          echo "Dockerfile not found in zip"
-          exit 1
+        sub="$(params.context-sub-path)"
+        sub="${sub#./}"
+        if [ -n "$sub" ]; then
+          case "$sub" in
+            /*|*..*)
+              echo "invalid context-sub-path: $sub"
+              exit 1
+              ;;
+          esac
+          ctx="/workspace/source/$sub"
+          df="$ctx/Dockerfile"
+          if [ ! -f "$df" ]; then
+            echo "Dockerfile not found in context-sub-path: $df"
+            exit 1
+          fi
+        else
+          # Auto-detect Dockerfile location for backward compatibility.
+          found="$(find /workspace/source -type f -name Dockerfile | head -n 2)"
+          count="$(printf '%s\n' "$found" | grep -c . || true)"
+          if [ "$count" -eq 0 ]; then
+            echo "Dockerfile not found in zip"
+            exit 1
+          fi
+          if [ "$count" -gt 1 ]; then
+            echo "Multiple Dockerfile files found; set context-sub-path for multi-app zip"
+            printf '%s\n' "$found"
+            exit 1
+          fi
+          df="$(printf '%s\n' "$found" | head -n 1)"
+          ctx="$(dirname "$df")"
         fi
-        if [ "$count" -gt 1 ]; then
-          echo "Multiple Dockerfile files found; please provide a zip with a single Dockerfile"
-          printf '%s\n' "$found"
-          exit 1
-        fi
-        df="$(printf '%s\n' "$found" | head -n 1)"
-        ctx="$(dirname "$df")"
         echo "$df" > /workspace/source/.dockerfile-path
         echo "$ctx" > /workspace/source/.context-path
       env:
@@ -168,6 +188,22 @@ spec:
         set -e
         dockerfile="/workspace/source/Dockerfile"
         context="/workspace/source"
+        sub="$(params.context-sub-path)"
+        sub="${sub#./}"
+        if [ -n "$sub" ]; then
+          case "$sub" in
+            /*|*..*)
+              echo "invalid context-sub-path: $sub"
+              exit 1
+              ;;
+          esac
+          dockerfile="/workspace/source/$sub/Dockerfile"
+          context="/workspace/source/$sub"
+          if [ ! -f "$dockerfile" ]; then
+            echo "Dockerfile not found: $dockerfile"
+            exit 1
+          fi
+        fi
         if [ -f /workspace/source/.dockerfile-path ]; then
           dockerfile="$(cat /workspace/source/.dockerfile-path)"
         fi

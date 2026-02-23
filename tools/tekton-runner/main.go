@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -25,12 +26,21 @@ type Input struct {
 	Namespace  string     `json:"namespace"`
 	Task       string     `json:"task"`
 	AppName    string     `json:"app_name"`
+	Apps       []AppSpec  `json:"apps"`
 	Workspace  string     `json:"workspace"`
 	Deploy     Deploy     `json:"deploy"`
 	Source     Source     `json:"source"`
 	Image      Image      `json:"image"`
 	Dependency Dependency `json:"dependency"`
 	Migration  Migration  `json:"migration"`
+}
+
+type AppSpec struct {
+	AppName       string `json:"app_name"`
+	Project       string `json:"project"`
+	Tag           string `json:"tag"`
+	ContainerPort int    `json:"container_port"`
+	ContextSubDir string `json:"context_sub_path"`
 }
 
 type Source struct {
@@ -45,6 +55,7 @@ type Source struct {
 	ZipURL      string     `json:"zip_url"`
 	ZipUsername string     `json:"zip_username"`
 	ZipPassword string     `json:"zip_password"`
+	ContextSub  string     `json:"context_sub_path"`
 	NFS         *NFSConfig `json:"nfs"`
 	SMB         *SMBConfig `json:"smb"`
 }
@@ -141,6 +152,14 @@ type Migration struct {
 	EnvName string   `json:"env_name"`
 }
 
+type AppTarget struct {
+	AppName       string
+	Project       string
+	Tag           string
+	ContainerPort int
+	ContextSubDir string
+}
+
 type RenderContext struct {
 	Namespace   string
 	Task        string
@@ -159,6 +178,8 @@ type RenderContext struct {
 	HasGit      bool
 	HasLocal    bool
 	HasZip      bool
+	AppName     string
+	ContextSub  string
 }
 
 type ServerState struct {
@@ -236,14 +257,105 @@ func deriveWorkspace(in Input) string {
 		return ws
 	}
 	app := sanitizeName(in.AppName)
+	if app == "" && len(in.Apps) > 0 {
+		app = sanitizeName(in.Apps[0].AppName)
+	}
 	if app == "" {
 		return ""
 	}
 	return "ws-" + app
 }
 
+func normalizeContextSubDir(raw string) (string, error) {
+	p := strings.TrimSpace(strings.ReplaceAll(raw, "\\", "/"))
+	if p == "" || p == "." {
+		return "", nil
+	}
+	p = path.Clean(p)
+	p = strings.TrimSpace(p)
+	if p == "." || p == "" {
+		return "", nil
+	}
+	if strings.HasPrefix(p, "/") || p == ".." || strings.HasPrefix(p, "../") || strings.Contains(p, "/../") {
+		return "", fmt.Errorf("invalid context_sub_path: %q", raw)
+	}
+	return strings.TrimPrefix(p, "./"), nil
+}
+
+func resolveAppTargets(in Input) ([]AppTarget, error) {
+	targets := make([]AppTarget, 0, 4)
+	basePort := in.Deploy.ContainerPort
+	if basePort == 0 {
+		basePort = 8080
+	}
+	baseTag := in.Image.Tag
+	if strings.TrimSpace(baseTag) == "" {
+		baseTag = "latest"
+	}
+	if len(in.Apps) == 0 {
+		p := strings.TrimSpace(in.Image.Project)
+		if p == "" {
+			p = sanitizeName(in.AppName)
+		}
+		if p == "" {
+			return nil, fmt.Errorf("app_name is required")
+		}
+		ctx, err := normalizeContextSubDir(in.Source.ContextSub)
+		if err != nil {
+			return nil, err
+		}
+		targets = append(targets, AppTarget{
+			AppName:       sanitizeName(in.AppName),
+			Project:       sanitizeName(p),
+			Tag:           strings.TrimSpace(baseTag),
+			ContainerPort: basePort,
+			ContextSubDir: ctx,
+		})
+		return targets, nil
+	}
+	seen := map[string]bool{}
+	for i, app := range in.Apps {
+		name := sanitizeName(app.AppName)
+		if name == "" {
+			return nil, fmt.Errorf("apps[%d].app_name is required", i)
+		}
+		if seen[name] {
+			return nil, fmt.Errorf("apps has duplicate app_name: %s", name)
+		}
+		seen[name] = true
+		project := sanitizeName(app.Project)
+		if project == "" {
+			project = name
+		}
+		tag := strings.TrimSpace(app.Tag)
+		if tag == "" {
+			tag = strings.TrimSpace(baseTag)
+		}
+		port := app.ContainerPort
+		if port == 0 {
+			port = basePort
+		}
+		ctx, err := normalizeContextSubDir(app.ContextSubDir)
+		if err != nil {
+			return nil, fmt.Errorf("apps[%d]: %w", i, err)
+		}
+		targets = append(targets, AppTarget{
+			AppName:       name,
+			Project:       project,
+			Tag:           tag,
+			ContainerPort: port,
+			ContextSubDir: ctx,
+		})
+	}
+	return targets, nil
+}
+
 func deriveApp(in Input) string {
-	return sanitizeName(in.AppName)
+	targets, err := resolveAppTargets(in)
+	if err != nil || len(targets) == 0 {
+		return sanitizeName(in.AppName)
+	}
+	return targets[0].AppName
 }
 
 func nextRunID() string {
@@ -300,7 +412,7 @@ func main() {
 		fatal("parse JSON", err)
 	}
 
-	manifests, err := buildManifests(&in)
+	manifests, targets, err := buildManifests(&in)
 	if err != nil {
 		fatal("validate input", err)
 	}
@@ -327,7 +439,8 @@ func main() {
 		return
 	}
 
-	var taskRunName string
+	taskRunByApp := map[string]string{}
+	taskRunOrder := make([]string, 0, len(targets))
 	runID := nextRunID()
 	ws := deriveWorkspace(in)
 	app := deriveApp(in)
@@ -341,9 +454,9 @@ func main() {
 				emitRunEvent(runID, ws, app, "taskrun", "failed", "TaskRun create failed", nil)
 				fatal("kubectl create", err)
 			}
-			taskRunName = name
+			taskRunOrder = append(taskRunOrder, name)
 			emitRunEvent(runID, ws, app, "taskrun", "submitted", "TaskRun created", map[string]string{
-				"taskrun":   taskRunName,
+				"taskrun":   name,
 				"namespace": in.Namespace,
 			})
 		} else {
@@ -353,9 +466,14 @@ func main() {
 			}
 		}
 	}
+	for i, t := range targets {
+		if i < len(taskRunOrder) {
+			taskRunByApp[t.AppName] = taskRunOrder[i]
+		}
+	}
 
-	if in.AppName != "" && taskRunName != "" && (in.Source.Type == "zip" || in.Source.Type == "git" || in.Source.Type == "local") {
-		if err := handleZipDeploy(in, taskRunName, runID); err != nil {
+	if len(taskRunByApp) > 0 && (in.Source.Type == "zip" || in.Source.Type == "git" || in.Source.Type == "local") {
+		if err := handleZipDeploy(in, targets, taskRunByApp, runID); err != nil {
 			emitRunEvent(runID, ws, app, "deploy", "failed", err.Error(), nil)
 			fatal("zip deploy", err)
 		}
@@ -413,7 +531,7 @@ func runServer(addr, apiKey string) {
 			"source_type": in.Source.Type,
 		})
 
-		manifests, err := buildManifests(&in)
+		manifests, targets, err := buildManifests(&in)
 		if err != nil {
 			emitRunEvent(runID, workspace, app, "validate", "failed", err.Error(), nil)
 			http.Error(w, err.Error(), http.StatusBadRequest)
@@ -433,7 +551,8 @@ func runServer(addr, apiKey string) {
 			return
 		}
 
-		var taskRunName string
+		taskRunByApp := map[string]string{}
+		taskRunOrder := make([]string, 0, len(targets))
 		for _, m := range manifests {
 			if isTaskRun(m) {
 				name, err := kubectlCreateName(m, in.Namespace)
@@ -444,9 +563,9 @@ func runServer(addr, apiKey string) {
 					http.Error(w, "kubectl create failed", http.StatusInternalServerError)
 					return
 				}
-				taskRunName = name
+				taskRunOrder = append(taskRunOrder, name)
 				emitRunEvent(runID, workspace, app, "taskrun", "submitted", "TaskRun created", map[string]string{
-					"taskrun":   taskRunName,
+					"taskrun":   name,
 					"namespace": in.Namespace,
 				})
 			} else {
@@ -457,28 +576,45 @@ func runServer(addr, apiKey string) {
 				}
 			}
 		}
+		for i, t := range targets {
+			if i < len(taskRunOrder) {
+				taskRunByApp[t.AppName] = taskRunOrder[i]
+			}
+		}
 		emitRunEvent(runID, workspace, app, "manifests", "succeeded", "Prerequisite manifests applied", nil)
 
-		if in.AppName != "" && taskRunName != "" && (in.Source.Type == "zip" || in.Source.Type == "git" || in.Source.Type == "local") {
-			go func(req Input, tr, rid string) {
-				if err := handleZipDeploy(req, tr, rid); err != nil {
+		if len(taskRunByApp) > 0 && (in.Source.Type == "zip" || in.Source.Type == "git" || in.Source.Type == "local") {
+			go func(req Input, tgts []AppTarget, taskRuns map[string]string, rid string) {
+				if err := handleZipDeploy(req, tgts, taskRuns, rid); err != nil {
 					emitRunEvent(rid, deriveWorkspace(req), deriveApp(req), "deploy", "failed", err.Error(), nil)
 					log.Printf("deploy error: %v", err)
 					return
 				}
 				emitRunEvent(rid, deriveWorkspace(req), deriveApp(req), "deploy", "succeeded", "End-to-end flow completed", nil)
-			}(in, taskRunName, runID)
+			}(in, targets, taskRunByApp, runID)
 		}
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusAccepted)
+		appNames := make([]string, 0, len(targets))
+		for _, t := range targets {
+			appNames = append(appNames, t.AppName)
+		}
+		taskRunPrimary := ""
+		if len(targets) > 0 {
+			taskRunPrimary = taskRunByApp[targets[0].AppName]
+		}
 		resp := map[string]any{
 			"status":    "submitted",
-			"taskrun":   taskRunName,
+			"taskrun":   taskRunPrimary,
+			"taskruns":  taskRunByApp,
+			"apps":      appNames,
 			"namespace": in.Namespace,
 			"workspace": workspace,
-			"app":       in.AppName,
+			"app":       deriveApp(in),
 			"run_id":    runID,
+			"multi_app": len(targets) > 1,
+			"app_count": len(targets),
 		}
 		_ = json.NewEncoder(w).Encode(resp)
 	})
@@ -1145,10 +1281,14 @@ func runServer(addr, apiKey string) {
 	log.Fatal(http.ListenAndServe(addr, nil))
 }
 
-func buildManifests(in *Input) ([]string, error) {
+func buildManifests(in *Input) ([]string, []AppTarget, error) {
 	setDefaults(in)
 	if err := validate(in); err != nil {
-		return nil, err
+		return nil, nil, err
+	}
+	targets, err := resolveAppTargets(*in)
+	if err != nil {
+		return nil, nil, err
 	}
 
 	manifests := make([]string, 0, 4)
@@ -1169,8 +1309,10 @@ func buildManifests(in *Input) ([]string, error) {
 		}
 	}
 
-	manifests = append(manifests, renderTaskRun(*in))
-	return manifests, nil
+	for _, t := range targets {
+		manifests = append(manifests, renderTaskRun(*in, t))
+	}
+	return manifests, targets, nil
 }
 
 func isTaskRun(m string) bool {
@@ -1209,31 +1351,39 @@ func kubectlCmd(args ...string) *exec.Cmd {
 	return cmd
 }
 
-func handleZipDeploy(in Input, taskRunName, runID string) error {
+func handleZipDeploy(in Input, targets []AppTarget, taskRuns map[string]string, runID string) error {
 	ns := in.Namespace
 	workspace := deriveWorkspace(in)
-	app := deriveApp(in)
-	emitRunEvent(runID, workspace, app, "build", "running", "Waiting for TaskRun to complete", map[string]string{
-		"taskrun":   taskRunName,
-		"namespace": ns,
-	})
-	if err := waitForTaskRun(ns, taskRunName, 45*time.Minute); err != nil {
-		captureAndArchiveTaskRunLogs(workspace, app, ns, taskRunName, 1200)
-		emitRunEvent(runID, workspace, app, "build", "failed", err.Error(), map[string]string{
+	if len(targets) == 0 {
+		return fmt.Errorf("no app target resolved")
+	}
+	for _, t := range targets {
+		taskRunName := strings.TrimSpace(taskRuns[t.AppName])
+		if taskRunName == "" {
+			return fmt.Errorf("taskrun not found for app %s", t.AppName)
+		}
+		emitRunEvent(runID, workspace, t.AppName, "build", "running", "Waiting for TaskRun to complete", map[string]string{
 			"taskrun":   taskRunName,
 			"namespace": ns,
 		})
-		return err
+		if err := waitForTaskRun(ns, taskRunName, 45*time.Minute); err != nil {
+			captureAndArchiveTaskRunLogs(workspace, t.AppName, ns, taskRunName, 1200)
+			emitRunEvent(runID, workspace, t.AppName, "build", "failed", err.Error(), map[string]string{
+				"taskrun":   taskRunName,
+				"namespace": ns,
+			})
+			return err
+		}
+		captureAndArchiveTaskRunLogs(workspace, t.AppName, ns, taskRunName, 1200)
+		emitRunEvent(runID, workspace, t.AppName, "build", "succeeded", "TaskRun completed successfully", map[string]string{
+			"taskrun":   taskRunName,
+			"namespace": ns,
+		})
 	}
-	captureAndArchiveTaskRunLogs(workspace, app, ns, taskRunName, 1200)
-	emitRunEvent(runID, workspace, app, "build", "succeeded", "TaskRun completed successfully", map[string]string{
-		"taskrun":   taskRunName,
-		"namespace": ns,
-	})
 
 	clusterName := in.Workspace
 	if clusterName == "" {
-		clusterName = "ws-" + sanitizeName(in.AppName)
+		clusterName = "ws-" + targets[0].AppName
 	}
 	kcfgDir := "/home/beko/kubeconfigs"
 	if err := os.MkdirAll(kcfgDir, 0o755); err != nil {
@@ -1241,59 +1391,62 @@ func handleZipDeploy(in Input, taskRunName, runID string) error {
 	}
 	kcfgPath := filepath.Join(kcfgDir, clusterName+".yaml")
 
-	emitRunEvent(runID, workspace, app, "workspace", "running", "Ensuring workspace cluster", nil)
+	leadApp := targets[0].AppName
+	emitRunEvent(runID, workspace, leadApp, "workspace", "running", "Ensuring workspace cluster", nil)
 	if err := ensureKindCluster(clusterName, kcfgPath); err != nil {
-		emitRunEvent(runID, workspace, app, "workspace", "failed", err.Error(), nil)
+		emitRunEvent(runID, workspace, leadApp, "workspace", "failed", err.Error(), nil)
 		return err
 	}
-	emitRunEvent(runID, workspace, app, "workspace", "succeeded", "Workspace cluster ready", nil)
+	emitRunEvent(runID, workspace, leadApp, "workspace", "succeeded", "Workspace cluster ready", nil)
 
-	image := fmt.Sprintf("%s/%s/%s:%s", in.Image.Registry, strings.ToLower(in.Image.Project), strings.ToLower(in.Image.Project), in.Image.Tag)
-	emitRunEvent(runID, workspace, app, "dependency", "running", "Applying dependencies", map[string]string{
+	emitRunEvent(runID, workspace, leadApp, "dependency", "running", "Applying dependencies", map[string]string{
 		"type": in.Dependency.Type,
 	})
-	envRefs, err := ensureWorkspaceDependencies(kcfgPath, clusterName, app, in.Dependency)
+	envRefs, err := ensureWorkspaceDependencies(kcfgPath, clusterName, leadApp, in.Dependency)
 	if err != nil {
-		emitRunEvent(runID, workspace, app, "dependency", "failed", err.Error(), map[string]string{
+		emitRunEvent(runID, workspace, leadApp, "dependency", "failed", err.Error(), map[string]string{
 			"type": in.Dependency.Type,
 		})
 		return err
 	}
-	emitRunEvent(runID, workspace, app, "dependency", "succeeded", "Dependencies ready", map[string]string{
+	emitRunEvent(runID, workspace, leadApp, "dependency", "succeeded", "Dependencies ready", map[string]string{
 		"type": in.Dependency.Type,
 	})
 	if in.Migration.Enabled {
-		emitRunEvent(runID, workspace, app, "migration", "running", "Running migration job", nil)
-		if err := runMigrationJob(kcfgPath, clusterName, app, in.Migration, envRefs); err != nil {
-			emitRunEvent(runID, workspace, app, "migration", "failed", err.Error(), nil)
+		emitRunEvent(runID, workspace, leadApp, "migration", "running", "Running migration job", nil)
+		if err := runMigrationJob(kcfgPath, clusterName, leadApp, in.Migration, envRefs); err != nil {
+			emitRunEvent(runID, workspace, leadApp, "migration", "failed", err.Error(), nil)
 			return err
 		}
-		emitRunEvent(runID, workspace, app, "migration", "succeeded", "Migration completed", nil)
+		emitRunEvent(runID, workspace, leadApp, "migration", "succeeded", "Migration completed", nil)
 	}
 
-	emitRunEvent(runID, workspace, app, "deploy", "running", "Applying deployment and service", map[string]string{
-		"image": image,
-	})
-	if err := applyDeployment(kcfgPath, clusterName, app, image, in.Deploy.ContainerPort, envRefs); err != nil {
-		emitRunEvent(runID, workspace, app, "deploy", "failed", err.Error(), nil)
-		return err
-	}
-	emitRunEvent(runID, workspace, app, "deploy", "succeeded", "Deployment applied", nil)
-
-	port, err := getServiceNodePort(kcfgPath, clusterName, app)
-	if err == nil {
-		host := serverHostIP
-		if host == "" {
-			host = "127.0.0.1"
-		}
-		url := fmt.Sprintf("http://%s:%d", host, port)
-		key := clusterName + "/" + app
-		serverState.mu.Lock()
-		serverState.endpoints[key] = url
-		serverState.mu.Unlock()
-		emitRunEvent(runID, workspace, app, "endpoint", "succeeded", "Application endpoint resolved", map[string]string{
-			"url": url,
+	for _, t := range targets {
+		image := fmt.Sprintf("%s/%s/%s:%s", in.Image.Registry, strings.ToLower(t.Project), strings.ToLower(t.Project), t.Tag)
+		emitRunEvent(runID, workspace, t.AppName, "deploy", "running", "Applying deployment and service", map[string]string{
+			"image": image,
 		})
+		if err := applyDeployment(kcfgPath, clusterName, t.AppName, image, t.ContainerPort, envRefs); err != nil {
+			emitRunEvent(runID, workspace, t.AppName, "deploy", "failed", err.Error(), nil)
+			return err
+		}
+		emitRunEvent(runID, workspace, t.AppName, "deploy", "succeeded", "Deployment applied", nil)
+
+		port, err := getServiceNodePort(kcfgPath, clusterName, t.AppName)
+		if err == nil {
+			host := serverHostIP
+			if host == "" {
+				host = "127.0.0.1"
+			}
+			url := fmt.Sprintf("http://%s:%d", host, port)
+			key := clusterName + "/" + t.AppName
+			serverState.mu.Lock()
+			serverState.endpoints[key] = url
+			serverState.mu.Unlock()
+			emitRunEvent(runID, workspace, t.AppName, "endpoint", "succeeded", "Application endpoint resolved", map[string]string{
+				"url": url,
+			})
+		}
 	}
 	return nil
 }
@@ -2203,6 +2356,19 @@ func openAPISpec() string {
         "type": "object",
         "properties": {
           "app_name": { "type": "string" },
+          "apps": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "app_name": { "type": "string" },
+                "project": { "type": "string" },
+                "tag": { "type": "string" },
+                "container_port": { "type": "integer" },
+                "context_sub_path": { "type": "string" }
+              }
+            }
+          },
           "workspace": { "type": "string" },
           "source": {
             "type": "object",
@@ -2216,7 +2382,8 @@ func openAPISpec() string {
               "pvc_name": { "type": "string" },
               "zip_url": { "type": "string" },
               "zip_username": { "type": "string" },
-              "zip_password": { "type": "string" }
+              "zip_password": { "type": "string" },
+              "context_sub_path": { "type": "string" }
             }
           },
           "image": {
@@ -3434,9 +3601,6 @@ func validate(in *Input) error {
 	if in.Source.Type != "git" && in.Source.Type != "local" && in.Source.Type != "zip" {
 		return fmt.Errorf("source.type must be git, local, or zip")
 	}
-	if in.Image.Project == "" {
-		return fmt.Errorf("image.project is required")
-	}
 	if in.Source.Type == "git" {
 		if in.Source.RepoURL == "" {
 			return fmt.Errorf("source.repo_url is required for git")
@@ -3454,9 +3618,29 @@ func validate(in *Input) error {
 		if in.Source.ZipURL == "" {
 			return fmt.Errorf("source.zip_url is required for zip")
 		}
-		if in.AppName == "" {
-			return fmt.Errorf("app_name is required for zip deployments")
+	}
+	if _, err := normalizeContextSubDir(in.Source.ContextSub); err != nil {
+		return err
+	}
+	if len(in.Apps) == 0 {
+		if strings.TrimSpace(in.AppName) == "" {
+			return fmt.Errorf("app_name is required when apps is empty")
 		}
+		if strings.TrimSpace(in.Image.Project) == "" {
+			return fmt.Errorf("image.project is required when apps is empty")
+		}
+	} else {
+		for i, app := range in.Apps {
+			if strings.TrimSpace(app.AppName) == "" {
+				return fmt.Errorf("apps[%d].app_name is required", i)
+			}
+			if _, err := normalizeContextSubDir(app.ContextSubDir); err != nil {
+				return fmt.Errorf("apps[%d]: %w", i, err)
+			}
+		}
+	}
+	if _, err := resolveAppTargets(*in); err != nil {
+		return err
 	}
 	if in.Workspace != "" && !strings.HasPrefix(in.Workspace, "ws-") {
 		return fmt.Errorf("workspace must start with ws-")
@@ -3652,7 +3836,7 @@ spec:
 	return secret, pv, pvc
 }
 
-func renderTaskRun(in Input) string {
+func renderTaskRun(in Input, target AppTarget) string {
 	ctx := RenderContext{
 		Namespace:   in.Namespace,
 		Task:        in.Task,
@@ -3660,8 +3844,8 @@ func renderTaskRun(in Input) string {
 		RepoURL:     in.Source.RepoURL,
 		Revision:    in.Source.Revision,
 		LocalPath:   in.Source.LocalPath,
-		Project:     in.Image.Project,
-		Tag:         in.Image.Tag,
+		Project:     target.Project,
+		Tag:         target.Tag,
 		Registry:    in.Image.Registry,
 		ZipURL:      in.Source.ZipURL,
 		ZipUsername: in.Source.ZipUsername,
@@ -3671,6 +3855,8 @@ func renderTaskRun(in Input) string {
 		HasGit:      in.Source.Type == "git" && in.Source.GitUsername != "" && in.Source.GitToken != "",
 		HasLocal:    in.Source.Type == "local",
 		HasZip:      in.Source.Type == "zip",
+		AppName:     target.AppName,
+		ContextSub:  target.ContextSubDir,
 	}
 
 	tpl := `apiVersion: tekton.dev/v1
@@ -3678,6 +3864,8 @@ kind: TaskRun
 metadata:
   generateName: build-and-push-run-
   namespace: {{.Namespace}}
+  labels:
+    tekton-runner.app: {{.AppName}}
 spec:
   serviceAccountName: build-bot
   taskRef:
@@ -3709,6 +3897,10 @@ spec:
       value: {{.Registry}}
     - name: tag
       value: {{.Tag}}
+{{- if .ContextSub }}
+    - name: context-sub-path
+      value: {{.ContextSub}}
+{{- end }}
 {{- if eq .SourceType "local" }}
     - name: local-path
       value: {{.LocalPath}}
