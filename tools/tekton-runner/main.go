@@ -178,10 +178,29 @@ type ExternalPortStore struct {
 	entries []ExternalPortEntry
 }
 
+type RunEvent struct {
+	Timestamp string            `json:"timestamp"`
+	RunID     string            `json:"run_id"`
+	Workspace string            `json:"workspace"`
+	App       string            `json:"app"`
+	Stage     string            `json:"stage"`
+	Status    string            `json:"status"`
+	Message   string            `json:"message"`
+	Meta      map[string]string `json:"meta,omitempty"`
+}
+
+type EventStore struct {
+	mu      sync.Mutex
+	path    string
+	events  []RunEvent
+	maxKeep int
+}
+
 var serverHostIP string
 var serverKubeconfig string
 var serverState = &ServerState{endpoints: map[string]string{}}
 var portStore = &ExternalPortStore{path: "/home/beko/port-map.json"}
+var eventStore = &EventStore{path: "/home/beko/run-events.jsonl", maxKeep: 5000}
 
 type Forward struct {
 	Port int
@@ -190,6 +209,42 @@ type Forward struct {
 
 var forwardMu sync.Mutex
 var forwards = map[string]*Forward{}
+
+func deriveWorkspace(in Input) string {
+	ws := strings.TrimSpace(in.Workspace)
+	if ws != "" {
+		return ws
+	}
+	app := sanitizeName(in.AppName)
+	if app == "" {
+		return ""
+	}
+	return "ws-" + app
+}
+
+func deriveApp(in Input) string {
+	return sanitizeName(in.AppName)
+}
+
+func nextRunID() string {
+	return time.Now().UTC().Format("20060102T150405Z") + "-" + randSuffix()
+}
+
+func emitRunEvent(runID, workspace, app, stage, status, msg string, meta map[string]string) {
+	if strings.TrimSpace(runID) == "" || strings.TrimSpace(workspace) == "" || strings.TrimSpace(app) == "" {
+		return
+	}
+	_ = eventStore.append(RunEvent{
+		Timestamp: time.Now().UTC().Format(time.RFC3339),
+		RunID:     runID,
+		Workspace: workspace,
+		App:       app,
+		Stage:     stage,
+		Status:    status,
+		Message:   msg,
+		Meta:      meta,
+	})
+}
 
 func main() {
 	inPath := flag.String("in", "", "input JSON file (default: stdin)")
@@ -253,30 +308,47 @@ func main() {
 	}
 
 	var taskRunName string
+	runID := nextRunID()
+	ws := deriveWorkspace(in)
+	app := deriveApp(in)
+	emitRunEvent(runID, ws, app, "request", "accepted", "CLI apply started", map[string]string{
+		"source_type": in.Source.Type,
+	})
 	for _, m := range manifests {
 		if isTaskRun(m) {
 			name, err := kubectlCreateName(m, in.Namespace)
 			if err != nil {
+				emitRunEvent(runID, ws, app, "taskrun", "failed", "TaskRun create failed", nil)
 				fatal("kubectl create", err)
 			}
 			taskRunName = name
+			emitRunEvent(runID, ws, app, "taskrun", "submitted", "TaskRun created", map[string]string{
+				"taskrun":   taskRunName,
+				"namespace": in.Namespace,
+			})
 		} else {
 			if err := kubectlApply(m); err != nil {
+				emitRunEvent(runID, ws, app, "manifests", "failed", "Prerequisite manifest apply failed", nil)
 				fatal("kubectl apply", err)
 			}
 		}
 	}
 
 	if in.AppName != "" && taskRunName != "" && (in.Source.Type == "zip" || in.Source.Type == "git" || in.Source.Type == "local") {
-		if err := handleZipDeploy(in, taskRunName); err != nil {
+		if err := handleZipDeploy(in, taskRunName, runID); err != nil {
+			emitRunEvent(runID, ws, app, "deploy", "failed", err.Error(), nil)
 			fatal("zip deploy", err)
 		}
+		emitRunEvent(runID, ws, app, "deploy", "succeeded", "End-to-end flow completed", nil)
 	}
 }
 
 func runServer(addr, apiKey string) {
 	if err := portStore.load(); err != nil {
 		log.Printf("port map load error: %v", err)
+	}
+	if err := eventStore.load(); err != nil {
+		log.Printf("event log load error: %v", err)
 	}
 	// Start port forwards for existing mappings
 	for _, e := range portStore.list() {
@@ -314,12 +386,20 @@ func runServer(addr, apiKey string) {
 			http.Error(w, "invalid JSON", http.StatusBadRequest)
 			return
 		}
+		workspace := deriveWorkspace(in)
+		app := deriveApp(in)
+		runID := nextRunID()
+		emitRunEvent(runID, workspace, app, "request", "accepted", "Run request accepted", map[string]string{
+			"source_type": in.Source.Type,
+		})
 
 		manifests, err := buildManifests(&in)
 		if err != nil {
+			emitRunEvent(runID, workspace, app, "validate", "failed", err.Error(), nil)
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
+		emitRunEvent(runID, workspace, app, "validate", "succeeded", "Input validated and manifests generated", nil)
 
 		dryRun := r.URL.Query().Get("dry_run") == "true"
 		if dryRun {
@@ -338,38 +418,47 @@ func runServer(addr, apiKey string) {
 			if isTaskRun(m) {
 				name, err := kubectlCreateName(m, in.Namespace)
 				if err != nil {
+					emitRunEvent(runID, workspace, app, "taskrun", "failed", "TaskRun create failed", map[string]string{
+						"namespace": in.Namespace,
+					})
 					http.Error(w, "kubectl create failed", http.StatusInternalServerError)
 					return
 				}
 				taskRunName = name
+				emitRunEvent(runID, workspace, app, "taskrun", "submitted", "TaskRun created", map[string]string{
+					"taskrun":   taskRunName,
+					"namespace": in.Namespace,
+				})
 			} else {
 				if err := kubectlApply(m); err != nil {
+					emitRunEvent(runID, workspace, app, "manifests", "failed", "Prerequisite manifest apply failed", nil)
 					http.Error(w, "kubectl apply failed", http.StatusInternalServerError)
 					return
 				}
 			}
 		}
+		emitRunEvent(runID, workspace, app, "manifests", "succeeded", "Prerequisite manifests applied", nil)
 
 		if in.AppName != "" && taskRunName != "" && (in.Source.Type == "zip" || in.Source.Type == "git" || in.Source.Type == "local") {
-			go func(req Input, tr string) {
-				if err := handleZipDeploy(req, tr); err != nil {
+			go func(req Input, tr, rid string) {
+				if err := handleZipDeploy(req, tr, rid); err != nil {
+					emitRunEvent(rid, deriveWorkspace(req), deriveApp(req), "deploy", "failed", err.Error(), nil)
 					log.Printf("deploy error: %v", err)
+					return
 				}
-			}(in, taskRunName)
+				emitRunEvent(rid, deriveWorkspace(req), deriveApp(req), "deploy", "succeeded", "End-to-end flow completed", nil)
+			}(in, taskRunName, runID)
 		}
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusAccepted)
-		workspace := in.Workspace
-		if workspace == "" && in.AppName != "" {
-			workspace = "ws-" + sanitizeName(in.AppName)
-		}
 		resp := map[string]any{
 			"status":    "submitted",
 			"taskrun":   taskRunName,
 			"namespace": in.Namespace,
 			"workspace": workspace,
 			"app":       in.AppName,
+			"run_id":    runID,
 		}
 		_ = json.NewEncoder(w).Encode(resp)
 	})
@@ -601,6 +690,42 @@ func runServer(addr, apiKey string) {
 			}
 		}
 		_ = cmd.Wait()
+	})
+
+	http.HandleFunc("/run/logs", func(w http.ResponseWriter, r *http.Request) {
+		workspace := strings.TrimSpace(r.URL.Query().Get("workspace"))
+		app := sanitizeName(r.URL.Query().Get("app"))
+		runID := strings.TrimSpace(r.URL.Query().Get("run_id"))
+		limit := 300
+		if v := strings.TrimSpace(r.URL.Query().Get("limit")); v != "" {
+			if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 5000 {
+				limit = n
+			}
+		}
+		if workspace == "" {
+			http.Error(w, "workspace is required", http.StatusBadRequest)
+			return
+		}
+		events := eventStore.query(workspace, app, runID, limit)
+		format := strings.TrimSpace(r.URL.Query().Get("format"))
+		if format == "text" {
+			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+			var b strings.Builder
+			for _, e := range events {
+				fmt.Fprintf(&b, "%s | run=%s | ws=%s | app=%s | %s/%s | %s\n",
+					e.Timestamp, e.RunID, e.Workspace, e.App, e.Stage, e.Status, e.Message)
+			}
+			w.Write([]byte(b.String()))
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"workspace": workspace,
+			"app":       app,
+			"run_id":    runID,
+			"count":     len(events),
+			"events":    events,
+		})
 	})
 
 	http.HandleFunc("/pod/logs/stream", func(w http.ResponseWriter, r *http.Request) {
@@ -878,6 +1003,7 @@ func runServer(addr, apiKey string) {
 		"/taskrun/status",
 		"/taskrun/logs",
 		"/taskrun/logs/stream",
+		"/run/logs",
 		"/pod/logs/stream",
 		"/app/delete",
 		"/app/status",
@@ -958,11 +1084,25 @@ func kubectlCmd(args ...string) *exec.Cmd {
 	return cmd
 }
 
-func handleZipDeploy(in Input, taskRunName string) error {
+func handleZipDeploy(in Input, taskRunName, runID string) error {
 	ns := in.Namespace
+	workspace := deriveWorkspace(in)
+	app := deriveApp(in)
+	emitRunEvent(runID, workspace, app, "build", "running", "Waiting for TaskRun to complete", map[string]string{
+		"taskrun":   taskRunName,
+		"namespace": ns,
+	})
 	if err := waitForTaskRun(ns, taskRunName, 45*time.Minute); err != nil {
+		emitRunEvent(runID, workspace, app, "build", "failed", err.Error(), map[string]string{
+			"taskrun":   taskRunName,
+			"namespace": ns,
+		})
 		return err
 	}
+	emitRunEvent(runID, workspace, app, "build", "succeeded", "TaskRun completed successfully", map[string]string{
+		"taskrun":   taskRunName,
+		"namespace": ns,
+	})
 
 	clusterName := in.Workspace
 	if clusterName == "" {
@@ -974,25 +1114,44 @@ func handleZipDeploy(in Input, taskRunName string) error {
 	}
 	kcfgPath := filepath.Join(kcfgDir, clusterName+".yaml")
 
+	emitRunEvent(runID, workspace, app, "workspace", "running", "Ensuring workspace cluster", nil)
 	if err := ensureKindCluster(clusterName, kcfgPath); err != nil {
+		emitRunEvent(runID, workspace, app, "workspace", "failed", err.Error(), nil)
 		return err
 	}
+	emitRunEvent(runID, workspace, app, "workspace", "succeeded", "Workspace cluster ready", nil)
 
 	image := fmt.Sprintf("%s/%s/%s:%s", in.Image.Registry, strings.ToLower(in.Image.Project), strings.ToLower(in.Image.Project), in.Image.Tag)
-	app := sanitizeName(in.AppName)
+	emitRunEvent(runID, workspace, app, "dependency", "running", "Applying dependencies", map[string]string{
+		"type": in.Dependency.Type,
+	})
 	envRefs, err := ensureWorkspaceDependencies(kcfgPath, clusterName, app, in.Dependency)
 	if err != nil {
+		emitRunEvent(runID, workspace, app, "dependency", "failed", err.Error(), map[string]string{
+			"type": in.Dependency.Type,
+		})
 		return err
 	}
+	emitRunEvent(runID, workspace, app, "dependency", "succeeded", "Dependencies ready", map[string]string{
+		"type": in.Dependency.Type,
+	})
 	if in.Migration.Enabled {
+		emitRunEvent(runID, workspace, app, "migration", "running", "Running migration job", nil)
 		if err := runMigrationJob(kcfgPath, clusterName, app, in.Migration, envRefs); err != nil {
+			emitRunEvent(runID, workspace, app, "migration", "failed", err.Error(), nil)
 			return err
 		}
+		emitRunEvent(runID, workspace, app, "migration", "succeeded", "Migration completed", nil)
 	}
 
+	emitRunEvent(runID, workspace, app, "deploy", "running", "Applying deployment and service", map[string]string{
+		"image": image,
+	})
 	if err := applyDeployment(kcfgPath, clusterName, app, image, in.Deploy.ContainerPort, envRefs); err != nil {
+		emitRunEvent(runID, workspace, app, "deploy", "failed", err.Error(), nil)
 		return err
 	}
+	emitRunEvent(runID, workspace, app, "deploy", "succeeded", "Deployment applied", nil)
 
 	port, err := getServiceNodePort(kcfgPath, clusterName, app)
 	if err == nil {
@@ -1005,6 +1164,9 @@ func handleZipDeploy(in Input, taskRunName string) error {
 		serverState.mu.Lock()
 		serverState.endpoints[key] = url
 		serverState.mu.Unlock()
+		emitRunEvent(runID, workspace, app, "endpoint", "succeeded", "Application endpoint resolved", map[string]string{
+			"url": url,
+		})
 	}
 	return nil
 }
@@ -1772,6 +1934,19 @@ func openAPISpec() string {
         "responses": { "200": { "description": "Logs" } }
       }
     },
+    "/run/logs": {
+      "get": {
+        "summary": "End-to-end timeline logs by workspace/app",
+        "parameters": [
+          { "name": "workspace", "in": "query", "required": true, "schema": { "type": "string" } },
+          { "name": "app", "in": "query", "required": false, "schema": { "type": "string" } },
+          { "name": "run_id", "in": "query", "required": false, "schema": { "type": "string" } },
+          { "name": "limit", "in": "query", "required": false, "schema": { "type": "integer" } },
+          { "name": "format", "in": "query", "required": false, "schema": { "type": "string", "enum": ["json","text"] } }
+        ],
+        "responses": { "200": { "description": "Timeline events" } }
+      }
+    },
     "/endpoint": {
       "get": {
         "summary": "Get app endpoint",
@@ -1999,6 +2174,89 @@ func swaggerHTML() string {
     </script>
   </body>
 </html>`
+}
+
+func (s *EventStore) load() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	data, err := os.ReadFile(s.path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			s.events = []RunEvent{}
+			return nil
+		}
+		return err
+	}
+	lines := strings.Split(string(data), "\n")
+	events := make([]RunEvent, 0, len(lines))
+	for _, ln := range lines {
+		ln = strings.TrimSpace(ln)
+		if ln == "" {
+			continue
+		}
+		var ev RunEvent
+		if err := json.Unmarshal([]byte(ln), &ev); err != nil {
+			continue
+		}
+		events = append(events, ev)
+	}
+	if s.maxKeep > 0 && len(events) > s.maxKeep {
+		events = events[len(events)-s.maxKeep:]
+	}
+	s.events = events
+	return nil
+}
+
+func (s *EventStore) append(ev RunEvent) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if ev.Timestamp == "" {
+		ev.Timestamp = time.Now().UTC().Format(time.RFC3339)
+	}
+	s.events = append(s.events, ev)
+	if s.maxKeep > 0 && len(s.events) > s.maxKeep {
+		s.events = s.events[len(s.events)-s.maxKeep:]
+	}
+	f, err := os.OpenFile(s.path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	b, err := json.Marshal(ev)
+	if err != nil {
+		return err
+	}
+	if _, err := f.Write(append(b, '\n')); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (s *EventStore) query(workspace, app, runID string, limit int) []RunEvent {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]RunEvent, 0, 128)
+	for i := len(s.events) - 1; i >= 0; i-- {
+		ev := s.events[i]
+		if workspace != "" && ev.Workspace != workspace {
+			continue
+		}
+		if app != "" && ev.App != app {
+			continue
+		}
+		if runID != "" && ev.RunID != runID {
+			continue
+		}
+		out = append(out, ev)
+		if limit > 0 && len(out) >= limit {
+			break
+		}
+	}
+	// reverse to chronological order
+	for i, j := 0, len(out)-1; i < j; i, j = i+1, j-1 {
+		out[i], out[j] = out[j], out[i]
+	}
+	return out
 }
 
 var errPortConflict = fmt.Errorf("external port already in use")

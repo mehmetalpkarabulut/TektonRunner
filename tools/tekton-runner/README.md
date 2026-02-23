@@ -105,6 +105,8 @@ API key ile:
 - `GET /healthz` -> `ok`
 - `POST /run` -> JSON alır, manifestleri apply eder
 - `POST /run?dry_run=true` -> YAML döner
+- `GET /run/logs?workspace=ws-...&app=...` -> build+deploy timeline loglari (JSON)
+- `GET /run/logs?workspace=ws-...&app=...&format=text` -> okunabilir timeline loglari (text)
 
 ### Postman Örneği
 
@@ -113,6 +115,12 @@ API key ile:
 - Header: `Content-Type: application/json`
 - Header (opsiyonel): `Authorization: Bearer YOUR_KEY`
 - Body: raw JSON (şema README üst kısmında)
+
+`POST /run` cevabinda `run_id` doner. Bu id ile log sorgusu daraltilabilir:
+
+```bash
+curl -s "http://<host>:8088/run/logs?workspace=ws-demo&app=demoapp&run_id=<RUN_ID>&format=text"
+```
 
 ## Dependency Orchestration (Redis / SQL)
 

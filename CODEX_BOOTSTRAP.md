@@ -128,6 +128,7 @@ curl -i http://127.0.0.1:8088/ui/
 - `GET /workspace/status?workspace=ws-...`
 - `GET /endpoint?workspace=ws-...&app=...`
 - `GET /external-map`
+- `GET /run/logs?workspace=ws-...&app=...`
 
 ## 10) JSON Ozeti
 
