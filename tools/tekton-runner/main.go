@@ -189,6 +189,20 @@ type RunEvent struct {
 	Meta      map[string]string `json:"meta,omitempty"`
 }
 
+type TaskRunLogBlock struct {
+	TaskRun   string `json:"taskrun"`
+	Namespace string `json:"namespace"`
+	Logs      string `json:"logs,omitempty"`
+	Error     string `json:"error,omitempty"`
+}
+
+type ContainerLogBlock struct {
+	Pod       string `json:"pod"`
+	Container string `json:"container"`
+	Logs      string `json:"logs,omitempty"`
+	Error     string `json:"error,omitempty"`
+}
+
 type EventStore struct {
 	mu      sync.Mutex
 	path    string
@@ -707,24 +721,90 @@ func runServer(addr, apiKey string) {
 			return
 		}
 		events := eventStore.query(workspace, app, runID, limit)
+		includeTaskRun := parseBoolQuery(r.URL.Query().Get("include_taskrun"), true)
+		includeContainers := parseBoolQuery(r.URL.Query().Get("include_containers"), true)
+		tailRaw := 400
+		if v := strings.TrimSpace(r.URL.Query().Get("tail_raw")); v != "" {
+			if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 5000 {
+				tailRaw = n
+			}
+		}
+		taskrunLogs := make([]TaskRunLogBlock, 0, 4)
+		containerLogs := make([]ContainerLogBlock, 0, 8)
+		errors := map[string]string{}
+
+		if includeTaskRun {
+			refs := extractTaskRuns(events)
+			for _, ref := range refs {
+				b, err := getTaskRunLogs(ref.Namespace, ref.TaskRun, strconv.Itoa(tailRaw))
+				if err != nil {
+					ref.Error = err.Error()
+				} else {
+					ref.Logs = string(b)
+				}
+				taskrunLogs = append(taskrunLogs, ref)
+			}
+		}
+		if includeContainers {
+			blocks, err := getWorkspaceContainerLogs(workspace, app, tailRaw)
+			if err != nil {
+				errors["container_logs"] = err.Error()
+			} else {
+				containerLogs = blocks
+			}
+		}
 		format := strings.TrimSpace(r.URL.Query().Get("format"))
 		if format == "text" {
 			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 			var b strings.Builder
+			b.WriteString("=== Timeline Events ===\n")
 			for _, e := range events {
 				fmt.Fprintf(&b, "%s | run=%s | ws=%s | app=%s | %s/%s | %s\n",
 					e.Timestamp, e.RunID, e.Workspace, e.App, e.Stage, e.Status, e.Message)
+			}
+			if includeTaskRun {
+				b.WriteString("\n=== TaskRun Logs ===\n")
+				for _, tr := range taskrunLogs {
+					fmt.Fprintf(&b, "\n--- taskrun=%s namespace=%s ---\n", tr.TaskRun, tr.Namespace)
+					if tr.Error != "" {
+						fmt.Fprintf(&b, "ERROR: %s\n", tr.Error)
+						continue
+					}
+					b.WriteString(tr.Logs)
+					if !strings.HasSuffix(tr.Logs, "\n") {
+						b.WriteString("\n")
+					}
+				}
+			}
+			if includeContainers {
+				b.WriteString("\n=== Workspace Container Logs ===\n")
+				for _, c := range containerLogs {
+					fmt.Fprintf(&b, "\n--- pod=%s container=%s ---\n", c.Pod, c.Container)
+					if c.Error != "" {
+						fmt.Fprintf(&b, "ERROR: %s\n", c.Error)
+						continue
+					}
+					b.WriteString(c.Logs)
+					if !strings.HasSuffix(c.Logs, "\n") {
+						b.WriteString("\n")
+					}
+				}
 			}
 			w.Write([]byte(b.String()))
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{
-			"workspace": workspace,
-			"app":       app,
-			"run_id":    runID,
-			"count":     len(events),
-			"events":    events,
+			"workspace":          workspace,
+			"app":                app,
+			"run_id":             runID,
+			"count":              len(events),
+			"events":             events,
+			"taskrun_logs":       taskrunLogs,
+			"container_logs":     containerLogs,
+			"include_taskrun":    includeTaskRun,
+			"include_containers": includeContainers,
+			"errors":             errors,
 		})
 	})
 
@@ -1942,6 +2022,9 @@ func openAPISpec() string {
           { "name": "app", "in": "query", "required": false, "schema": { "type": "string" } },
           { "name": "run_id", "in": "query", "required": false, "schema": { "type": "string" } },
           { "name": "limit", "in": "query", "required": false, "schema": { "type": "integer" } },
+          { "name": "include_taskrun", "in": "query", "required": false, "schema": { "type": "boolean" } },
+          { "name": "include_containers", "in": "query", "required": false, "schema": { "type": "boolean" } },
+          { "name": "tail_raw", "in": "query", "required": false, "schema": { "type": "integer" } },
           { "name": "format", "in": "query", "required": false, "schema": { "type": "string", "enum": ["json","text"] } }
         ],
         "responses": { "200": { "description": "Timeline events" } }
@@ -2257,6 +2340,103 @@ func (s *EventStore) query(workspace, app, runID string, limit int) []RunEvent {
 		out[i], out[j] = out[j], out[i]
 	}
 	return out
+}
+
+func parseBoolQuery(v string, def bool) bool {
+	v = strings.TrimSpace(strings.ToLower(v))
+	if v == "" {
+		return def
+	}
+	return v == "1" || v == "true" || v == "yes" || v == "on"
+}
+
+func extractTaskRuns(events []RunEvent) []TaskRunLogBlock {
+	seen := map[string]bool{}
+	out := make([]TaskRunLogBlock, 0, 8)
+	for _, ev := range events {
+		if ev.Stage != "taskrun" {
+			continue
+		}
+		if ev.Meta == nil {
+			continue
+		}
+		name := strings.TrimSpace(ev.Meta["taskrun"])
+		ns := strings.TrimSpace(ev.Meta["namespace"])
+		if name == "" {
+			continue
+		}
+		if ns == "" {
+			ns = "tekton-pipelines"
+		}
+		key := ns + "/" + name
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, TaskRunLogBlock{TaskRun: name, Namespace: ns})
+		if len(out) >= 20 {
+			break
+		}
+	}
+	return out
+}
+
+func getWorkspaceContainerLogs(workspace, app string, tail int) ([]ContainerLogBlock, error) {
+	kcfg := filepath.Join("/home/beko/kubeconfigs", workspace+".yaml")
+	if _, err := os.Stat(kcfg); err != nil {
+		return nil, fmt.Errorf("kubeconfig not found for workspace %s", workspace)
+	}
+	args := []string{"--kubeconfig", kcfg, "-n", workspace, "get", "pods"}
+	if strings.TrimSpace(app) != "" {
+		args = append(args, "-l", "app="+app)
+	}
+	args = append(args, "-o", `jsonpath={range .items[*]}{.metadata.name}|{range .spec.containers[*]}{.name},{end}{"\n"}{end}`)
+	cmd := exec.Command("kubectl", args...)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return nil, fmt.Errorf("get pods failed: %v", err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+	blocks := make([]ContainerLogBlock, 0, 16)
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		parts := strings.SplitN(line, "|", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		pod := strings.TrimSpace(parts[0])
+		containerCSV := strings.Trim(parts[1], ",")
+		if pod == "" || containerCSV == "" {
+			continue
+		}
+		containers := strings.Split(containerCSV, ",")
+		for _, c := range containers {
+			c = strings.TrimSpace(c)
+			if c == "" {
+				continue
+			}
+			logArgs := []string{"--kubeconfig", kcfg, "-n", workspace, "logs", pod, "-c", c, "--tail", strconv.Itoa(tail)}
+			logCmd := exec.Command("kubectl", logArgs...)
+			logOut, logErr := logCmd.CombinedOutput()
+			block := ContainerLogBlock{
+				Pod:       pod,
+				Container: c,
+				Logs:      string(logOut),
+			}
+			if logErr != nil {
+				block.Error = strings.TrimSpace(string(logOut))
+				block.Logs = ""
+			}
+			blocks = append(blocks, block)
+			if len(blocks) >= 100 {
+				return blocks, nil
+			}
+		}
+	}
+	return blocks, nil
 }
 
 var errPortConflict = fmt.Errorf("external port already in use")

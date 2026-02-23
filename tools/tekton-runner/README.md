@@ -108,6 +108,16 @@ API key ile:
 - `GET /run/logs?workspace=ws-...&app=...` -> build+deploy timeline loglari (JSON)
 - `GET /run/logs?workspace=ws-...&app=...&format=text` -> okunabilir timeline loglari (text)
 
+`/run/logs` varsayilan olarak su loglari bir arada dondurur:
+- timeline event loglari
+- ilgili TaskRun ham loglari
+- workspace pod/container ham loglari
+
+Opsiyonel query parametreleri:
+- `include_taskrun=true|false`
+- `include_containers=true|false`
+- `tail_raw=400` (TaskRun/container ham log tail satiri)
+
 ### Postman Örneği
 
 - Method: `POST`
