@@ -103,6 +103,7 @@ API key ile:
 ### Endpointler
 
 - `GET /healthz` -> `ok`
+- `POST /zip/upload` -> multipart ile zip yukler, `zip-server:/srv/<file>.zip` olarak kaydeder
 - `POST /run` -> JSON alır, manifestleri apply eder
 - `POST /run?dry_run=true` -> YAML döner
 - `GET /run/logs?workspace=ws-...&app=...` -> build+deploy timeline loglari (JSON)
@@ -140,6 +141,25 @@ Opsiyonel query parametreleri:
 
 ```bash
 curl -s "http://<host>:8088/run/logs?workspace=ws-demo&app=demoapp&run_id=<RUN_ID>&format=text"
+```
+
+### Zip Upload Ornegi
+
+`zip-server` icine yeni zip dosyasi yuklemek icin:
+
+```bash
+curl -sS -X POST "http://<host>:8088/zip/upload" \
+  -H "Authorization: Bearer YOUR_KEY" \
+  -F "file=@/home/beko/myproject.zip"
+```
+
+Opsiyonel dosya adi override:
+
+```bash
+curl -sS -X POST "http://<host>:8088/zip/upload" \
+  -H "Authorization: Bearer YOUR_KEY" \
+  -F "file=@/home/beko/myproject.zip" \
+  -F "filename=demo-v2.zip"
 ```
 
 ### Multi-App (tek run, birden fazla pod)

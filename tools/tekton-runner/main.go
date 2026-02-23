@@ -242,6 +242,8 @@ var portStore = &ExternalPortStore{path: "/home/beko/port-map.json"}
 var eventStore = &EventStore{path: "/home/beko/run-events.jsonl", maxKeep: 5000}
 var logArchiveRoot = "/home/beko/run-log-archive"
 var pathTokenRe = regexp.MustCompile(`[^a-zA-Z0-9._-]+`)
+var zipServerNamespace = "tekton-pipelines"
+var zipServerServiceName = "zip-server"
 
 type Forward struct {
 	Port int
@@ -498,6 +500,90 @@ func runServer(addr, apiKey string) {
 	http.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("ok"))
+	})
+
+	http.HandleFunc("/zip/upload", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		if apiKey != "" {
+			auth := r.Header.Get("Authorization")
+			if auth != "Bearer "+apiKey {
+				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				return
+			}
+		}
+
+		const maxUploadSize = 512 << 20 // 512MiB
+		r.Body = http.MaxBytesReader(w, r.Body, maxUploadSize)
+		if err := r.ParseMultipartForm(32 << 20); err != nil {
+			http.Error(w, "invalid multipart form", http.StatusBadRequest)
+			return
+		}
+
+		file, header, err := r.FormFile("file")
+		if err != nil {
+			http.Error(w, "file is required (multipart field: file)", http.StatusBadRequest)
+			return
+		}
+		defer file.Close()
+
+		filenameInput := strings.TrimSpace(r.FormValue("filename"))
+		if filenameInput == "" && header != nil {
+			filenameInput = header.Filename
+		}
+		filename, err := sanitizeZipFilename(filenameInput)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		tmp, err := os.CreateTemp("", "zip-upload-*.zip")
+		if err != nil {
+			http.Error(w, "temp file create failed", http.StatusInternalServerError)
+			return
+		}
+		tmpPath := tmp.Name()
+		defer os.Remove(tmpPath)
+		if _, err := io.Copy(tmp, file); err != nil {
+			tmp.Close()
+			http.Error(w, "failed to store upload", http.StatusInternalServerError)
+			return
+		}
+		if err := tmp.Close(); err != nil {
+			http.Error(w, "failed to finalize upload", http.StatusInternalServerError)
+			return
+		}
+
+		pod, err := getRunningZipServerPod()
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if err := kubectlExecInPod(zipServerNamespace, pod, "mkdir", "-p", "/srv"); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if err := kubectlCopyToPod(zipServerNamespace, tmpPath, pod, "/srv/"+filename); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		host := resolveExternalHost(r)
+		externalPort := zipServerExternalPort()
+		internalURL := fmt.Sprintf("http://%s.%s.svc.cluster.local:8080/%s", zipServerServiceName, zipServerNamespace, filename)
+		externalURL := fmt.Sprintf("http://%s:%s/%s", host, externalPort, filename)
+		resp := map[string]any{
+			"status":       "uploaded",
+			"filename":     filename,
+			"pod":          pod,
+			"internal_url": internalURL,
+			"external_url": externalURL,
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(resp)
 	})
 
 	http.HandleFunc("/run", func(w http.ResponseWriter, r *http.Request) {
@@ -1252,6 +1338,7 @@ func runServer(addr, apiKey string) {
 	}
 	for _, p := range []string{
 		"/healthz",
+		"/zip/upload",
 		"/run",
 		"/endpoint",
 		"/workspaces",
@@ -1349,6 +1436,82 @@ func kubectlCmd(args ...string) *exec.Cmd {
 		cmd.Env = append(os.Environ(), "KUBECONFIG="+serverKubeconfig)
 	}
 	return cmd
+}
+
+func sanitizeZipFilename(name string) (string, error) {
+	base := filepath.Base(strings.TrimSpace(name))
+	if base == "" || base == "." {
+		return "", fmt.Errorf("filename is required")
+	}
+	safe := pathTokenRe.ReplaceAllString(base, "-")
+	safe = strings.Trim(safe, "-.")
+	if safe == "" {
+		return "", fmt.Errorf("invalid filename")
+	}
+	if !strings.HasSuffix(strings.ToLower(safe), ".zip") {
+		return "", fmt.Errorf("filename must end with .zip")
+	}
+	return safe, nil
+}
+
+func getRunningZipServerPod() (string, error) {
+	cmd := kubectlCmd("-n", zipServerNamespace, "get", "pods", "-l", "app="+zipServerServiceName, "--field-selector=status.phase=Running", "-o", "jsonpath={.items[0].metadata.name}")
+	out, err := cmd.CombinedOutput()
+	pod := strings.TrimSpace(string(out))
+	if err != nil {
+		return "", fmt.Errorf("zip-server pod query failed: %v: %s", err, strings.TrimSpace(string(out)))
+	}
+	if pod == "" {
+		return "", fmt.Errorf("no running zip-server pod found")
+	}
+	return pod, nil
+}
+
+func kubectlExecInPod(namespace, pod string, args ...string) error {
+	base := []string{"-n", namespace, "exec", pod, "--"}
+	base = append(base, args...)
+	cmd := kubectlCmd(base...)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("kubectl exec failed: %v: %s", err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+func kubectlCopyToPod(namespace, src, pod, dst string) error {
+	spec := namespace + "/" + pod + ":" + dst
+	cmd := kubectlCmd("-n", namespace, "cp", src, spec)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("kubectl cp failed: %v: %s", err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+func zipServerExternalPort() string {
+	p := strings.TrimSpace(os.Getenv("ZIP_SERVER_EXTERNAL_PORT"))
+	if p == "" {
+		return "18080"
+	}
+	return p
+}
+
+func resolveExternalHost(r *http.Request) string {
+	if strings.TrimSpace(serverHostIP) != "" {
+		return serverHostIP
+	}
+	host := strings.TrimSpace(r.Host)
+	if host == "" {
+		return "127.0.0.1"
+	}
+	if strings.Contains(host, ":") {
+		parts := strings.Split(host, ":")
+		host = parts[0]
+	}
+	if host == "" || host == "0.0.0.0" {
+		return "127.0.0.1"
+	}
+	return host
 }
 
 func handleZipDeploy(in Input, targets []AppTarget, taskRuns map[string]string, runID string) error {
@@ -2191,6 +2354,32 @@ func openAPISpec() string {
           "content": { "application/json": { "schema": { "$ref": "#/components/schemas/RunRequest" } } }
         },
         "responses": { "202": { "description": "Submitted" } }
+      }
+    },
+    "/zip/upload": {
+      "post": {
+        "summary": "Upload a zip file to zip-server (/srv)",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "required": ["file"],
+                "properties": {
+                  "file": { "type": "string", "format": "binary" },
+                  "filename": { "type": "string", "description": "Optional override filename (.zip)" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Uploaded" },
+          "400": { "description": "Invalid request" },
+          "401": { "description": "Unauthorized" },
+          "500": { "description": "Upload failed" }
+        }
       }
     },
     "/taskrun/status": {
