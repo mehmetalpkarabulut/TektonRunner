@@ -10,7 +10,7 @@
       href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap"
       rel="stylesheet"
     />
-    <link rel="stylesheet" href="/ui/styles.css?v=20260218-3" />
+    <link rel="stylesheet" href="/ui/styles.css?v=20260224-4" />
   </head>
   <body>
     <div class="orb orb-a"></div>
@@ -103,8 +103,8 @@
                 <option value="true">true</option>
               </select>
             </div>
-            <div class="form-field" id="gitMigrationCmdWrap"><label>Migration Command (csv, required if enabled)</label><input id="gitMigrationCmd" value="dotnet,ef,database,update" /></div>
-            <div class="form-field" id="gitMigrationArgsWrap"><label>Migration Args (csv)</label><input id="gitMigrationArgs" placeholder="--project,src/App.csproj" /></div>
+            <div class="form-field" id="gitMigrationCmdWrap"><label>Migration Command (csv, optional)</label><input id="gitMigrationCmd" placeholder="ornek: dotnet,ef,database,update" /></div>
+            <div class="form-field" id="gitMigrationArgsWrap"><label>Migration Args (csv, optional)</label><input id="gitMigrationArgs" placeholder="ornek: --project,src/App.csproj" /></div>
           </div>
           <details class="advanced-box">
             <summary>Advanced (optional overrides)</summary>
@@ -113,12 +113,12 @@
               <div class="form-field"><label>Redis Service</label><input id="gitRedisService" value="redis" /></div>
               <div class="form-field"><label>Redis Port</label><input id="gitRedisPort" type="number" min="1" value="6379" /></div>
               <div class="form-field"><label>Redis Env Key</label><input id="gitRedisEnv" value="ConnectionStrings__Redis" /></div>
-              <div class="form-field"><label>SQL Image</label><input id="gitSqlImage" value="lenovo:8443/library/mssql-server:2022-latest" /></div>
-              <div class="form-field"><label>SQL Service</label><input id="gitSqlService" value="sql" /></div>
-              <div class="form-field"><label>SQL Port</label><input id="gitSqlPort" type="number" min="1" value="1433" /></div>
-              <div class="form-field"><label>SQL Username</label><input id="gitSqlUser" value="sa" /></div>
+              <div class="form-field"><label>SQL Image</label><input id="gitSqlImage" value="lenovo:8443/library/postgres:16-alpine" /></div>
+              <div class="form-field"><label>SQL Service</label><input id="gitSqlService" value="postgres" /></div>
+              <div class="form-field"><label>SQL Port</label><input id="gitSqlPort" type="number" min="1" value="5432" /></div>
+              <div class="form-field"><label>SQL Username</label><input id="gitSqlUser" value="postgres" /></div>
               <div class="form-field"><label>SQL Env Key</label><input id="gitSqlEnv" value="ConnectionStrings__DefaultConnection" /></div>
-              <div class="form-field"><label>Migration Image</label><input id="gitMigrationImage" value="lenovo:8443/library/dotnet-sdk:8.0" /></div>
+              <div class="form-field"><label>Migration Image (opsiyonel, bossa app image)</label><input id="gitMigrationImage" placeholder="ornek: lenovo:8443/library/dotnet-sdk:8.0-ef" /></div>
               <div class="form-field"><label>Migration Env Key</label><input id="gitMigrationEnv" value="ConnectionStrings__DefaultConnection" /></div>
             </div>
           </details>
@@ -158,8 +158,8 @@
                 <option value="true">true</option>
               </select>
             </div>
-            <div class="form-field" id="zipMigrationCmdWrap"><label>Migration Command (csv, required if enabled)</label><input id="zipMigrationCmd" value="dotnet,ef,database,update" /></div>
-            <div class="form-field" id="zipMigrationArgsWrap"><label>Migration Args (csv)</label><input id="zipMigrationArgs" placeholder="--project,src/App.csproj" /></div>
+            <div class="form-field" id="zipMigrationCmdWrap"><label>Migration Command (csv, optional)</label><input id="zipMigrationCmd" placeholder="ornek: dotnet,ef,database,update" /></div>
+            <div class="form-field" id="zipMigrationArgsWrap"><label>Migration Args (csv, optional)</label><input id="zipMigrationArgs" placeholder="ornek: --project,src/App.csproj" /></div>
           </div>
           <details class="advanced-box">
             <summary>Advanced (optional overrides)</summary>
@@ -168,12 +168,12 @@
               <div class="form-field"><label>Redis Service</label><input id="zipRedisService" value="redis" /></div>
               <div class="form-field"><label>Redis Port</label><input id="zipRedisPort" type="number" min="1" value="6379" /></div>
               <div class="form-field"><label>Redis Env Key</label><input id="zipRedisEnv" value="ConnectionStrings__Redis" /></div>
-              <div class="form-field"><label>SQL Image</label><input id="zipSqlImage" value="lenovo:8443/library/mssql-server:2022-latest" /></div>
-              <div class="form-field"><label>SQL Service</label><input id="zipSqlService" value="sql" /></div>
-              <div class="form-field"><label>SQL Port</label><input id="zipSqlPort" type="number" min="1" value="1433" /></div>
-              <div class="form-field"><label>SQL Username</label><input id="zipSqlUser" value="sa" /></div>
+              <div class="form-field"><label>SQL Image</label><input id="zipSqlImage" value="lenovo:8443/library/postgres:16-alpine" /></div>
+              <div class="form-field"><label>SQL Service</label><input id="zipSqlService" value="postgres" /></div>
+              <div class="form-field"><label>SQL Port</label><input id="zipSqlPort" type="number" min="1" value="5432" /></div>
+              <div class="form-field"><label>SQL Username</label><input id="zipSqlUser" value="postgres" /></div>
               <div class="form-field"><label>SQL Env Key</label><input id="zipSqlEnv" value="ConnectionStrings__DefaultConnection" /></div>
-              <div class="form-field"><label>Migration Image</label><input id="zipMigrationImage" value="lenovo:8443/library/dotnet-sdk:8.0" /></div>
+              <div class="form-field"><label>Migration Image (opsiyonel, bossa app image)</label><input id="zipMigrationImage" placeholder="ornek: lenovo:8443/library/dotnet-sdk:8.0-ef" /></div>
               <div class="form-field"><label>Migration Env Key</label><input id="zipMigrationEnv" value="ConnectionStrings__DefaultConnection" /></div>
             </div>
           </details>
@@ -213,8 +213,8 @@
                 <option value="true">true</option>
               </select>
             </div>
-            <div class="form-field" id="localMigrationCmdWrap"><label>Migration Command (csv, required if enabled)</label><input id="localMigrationCmd" value="dotnet,ef,database,update" /></div>
-            <div class="form-field" id="localMigrationArgsWrap"><label>Migration Args (csv)</label><input id="localMigrationArgs" placeholder="--project,src/App.csproj" /></div>
+            <div class="form-field" id="localMigrationCmdWrap"><label>Migration Command (csv, optional)</label><input id="localMigrationCmd" placeholder="ornek: dotnet,ef,database,update" /></div>
+            <div class="form-field" id="localMigrationArgsWrap"><label>Migration Args (csv, optional)</label><input id="localMigrationArgs" placeholder="ornek: --project,src/App.csproj" /></div>
           </div>
           <details class="advanced-box">
             <summary>Advanced (optional overrides)</summary>
@@ -223,12 +223,12 @@
               <div class="form-field"><label>Redis Service</label><input id="localRedisService" value="redis" /></div>
               <div class="form-field"><label>Redis Port</label><input id="localRedisPort" type="number" min="1" value="6379" /></div>
               <div class="form-field"><label>Redis Env Key</label><input id="localRedisEnv" value="ConnectionStrings__Redis" /></div>
-              <div class="form-field"><label>SQL Image</label><input id="localSqlImage" value="lenovo:8443/library/mssql-server:2022-latest" /></div>
-              <div class="form-field"><label>SQL Service</label><input id="localSqlService" value="sql" /></div>
-              <div class="form-field"><label>SQL Port</label><input id="localSqlPort" type="number" min="1" value="1433" /></div>
-              <div class="form-field"><label>SQL Username</label><input id="localSqlUser" value="sa" /></div>
+              <div class="form-field"><label>SQL Image</label><input id="localSqlImage" value="lenovo:8443/library/postgres:16-alpine" /></div>
+              <div class="form-field"><label>SQL Service</label><input id="localSqlService" value="postgres" /></div>
+              <div class="form-field"><label>SQL Port</label><input id="localSqlPort" type="number" min="1" value="5432" /></div>
+              <div class="form-field"><label>SQL Username</label><input id="localSqlUser" value="postgres" /></div>
               <div class="form-field"><label>SQL Env Key</label><input id="localSqlEnv" value="ConnectionStrings__DefaultConnection" /></div>
-              <div class="form-field"><label>Migration Image</label><input id="localMigrationImage" value="lenovo:8443/library/dotnet-sdk:8.0" /></div>
+              <div class="form-field"><label>Migration Image (opsiyonel, bossa app image)</label><input id="localMigrationImage" placeholder="ornek: lenovo:8443/library/dotnet-sdk:8.0-ef" /></div>
               <div class="form-field"><label>Migration Env Key</label><input id="localMigrationEnv" value="ConnectionStrings__DefaultConnection" /></div>
             </div>
           </details>
@@ -307,6 +307,6 @@
       </main>
     </div>
 
-    <script src="/ui/app.js?v=20260223-3"></script>
+    <script src="/ui/app.js?v=20260224-4"></script>
   </body>
 </html>

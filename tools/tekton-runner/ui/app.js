@@ -958,11 +958,11 @@ function buildGitPayload() {
         throw new Error("SQL dependency icin SQL Database ve SQL Password zorunlu.");
       }
       payload.dependency.sql = {
-        image: document.getElementById("gitSqlImage").value.trim() || "lenovo:8443/library/mssql-server:2022-latest",
-        service_name: document.getElementById("gitSqlService").value.trim() || "sql",
-        port: parseInt(document.getElementById("gitSqlPort").value, 10) || 1433,
+        image: document.getElementById("gitSqlImage").value.trim() || "lenovo:8443/library/postgres:16-alpine",
+        service_name: document.getElementById("gitSqlService").value.trim() || "postgres",
+        port: parseInt(document.getElementById("gitSqlPort").value, 10) || 5432,
         database: sqlDb,
-        username: document.getElementById("gitSqlUser").value.trim() || "sa",
+        username: document.getElementById("gitSqlUser").value.trim() || "postgres",
         password: sqlPass,
         connection_env: document.getElementById("gitSqlEnv").value.trim() || "ConnectionStrings__DefaultConnection"
       };
@@ -971,13 +971,13 @@ function buildGitPayload() {
 
   if (migrationEnabled) {
     const commandCsv = document.getElementById("gitMigrationCmd").value.trim();
-    if (!commandCsv) {
-      throw new Error("Migration enabled ise Migration Command zorunlu.");
-    }
     const argsCsv = document.getElementById("gitMigrationArgs").value.trim();
+    if (!commandCsv && argsCsv) {
+      throw new Error("Migration Args verildiyse Migration Command da girilmeli.");
+    }
     payload.migration = {
       enabled: true,
-      image: document.getElementById("gitMigrationImage").value.trim() || "lenovo:8443/library/dotnet-sdk:8.0",
+      image: document.getElementById("gitMigrationImage").value.trim(),
       command: commandCsv ? commandCsv.split(",").map((s) => s.trim()).filter(Boolean) : [],
       args: argsCsv ? argsCsv.split(",").map((s) => s.trim()).filter(Boolean) : [],
       env_name: document.getElementById("gitMigrationEnv").value.trim() || "ConnectionStrings__DefaultConnection"
@@ -1032,11 +1032,11 @@ function buildDependencyPayload(prefix) {
       throw new Error("SQL dependency icin SQL Database ve SQL Password zorunlu.");
     }
     dep.sql = {
-      image: document.getElementById(`${prefix}SqlImage`).value.trim() || "lenovo:8443/library/mssql-server:2022-latest",
-      service_name: document.getElementById(`${prefix}SqlService`).value.trim() || "sql",
-      port: parseInt(document.getElementById(`${prefix}SqlPort`).value, 10) || 1433,
+      image: document.getElementById(`${prefix}SqlImage`).value.trim() || "lenovo:8443/library/postgres:16-alpine",
+      service_name: document.getElementById(`${prefix}SqlService`).value.trim() || "postgres",
+      port: parseInt(document.getElementById(`${prefix}SqlPort`).value, 10) || 5432,
       database: sqlDb,
-      username: document.getElementById(`${prefix}SqlUser`).value.trim() || "sa",
+      username: document.getElementById(`${prefix}SqlUser`).value.trim() || "postgres",
       password: sqlPass,
       connection_env: document.getElementById(`${prefix}SqlEnv`).value.trim() || "ConnectionStrings__DefaultConnection"
     };
@@ -1053,13 +1053,13 @@ function buildMigrationPayload(prefix, depType) {
     throw new Error("Migration sadece sql/both dependency ile kullanilabilir.");
   }
   const commandCsv = document.getElementById(`${prefix}MigrationCmd`)?.value.trim() || "";
-  if (!commandCsv) {
-    throw new Error("Migration enabled ise Migration Command zorunlu.");
-  }
   const argsCsv = document.getElementById(`${prefix}MigrationArgs`)?.value.trim() || "";
+  if (!commandCsv && argsCsv) {
+    throw new Error("Migration Args verildiyse Migration Command da girilmeli.");
+  }
   return {
     enabled: true,
-    image: document.getElementById(`${prefix}MigrationImage`)?.value.trim() || "lenovo:8443/library/dotnet-sdk:8.0",
+    image: document.getElementById(`${prefix}MigrationImage`)?.value.trim() || "",
     command: commandCsv ? commandCsv.split(",").map((s) => s.trim()).filter(Boolean) : [],
     args: argsCsv ? argsCsv.split(",").map((s) => s.trim()).filter(Boolean) : [],
     env_name: document.getElementById(`${prefix}MigrationEnv`)?.value.trim() || "ConnectionStrings__DefaultConnection"
@@ -1159,16 +1159,16 @@ function fillGitForm(sample) {
   document.getElementById("gitRedisService").value = sample.dependency?.redis?.service_name || "redis";
   document.getElementById("gitRedisPort").value = sample.dependency?.redis?.port || 6379;
   document.getElementById("gitRedisEnv").value = sample.dependency?.redis?.connection_env || "ConnectionStrings__Redis";
-  document.getElementById("gitSqlImage").value = sample.dependency?.sql?.image || "lenovo:8443/library/mssql-server:2022-latest";
-  document.getElementById("gitSqlService").value = sample.dependency?.sql?.service_name || "sql";
-  document.getElementById("gitSqlPort").value = sample.dependency?.sql?.port || 1433;
+  document.getElementById("gitSqlImage").value = sample.dependency?.sql?.image || "lenovo:8443/library/postgres:16-alpine";
+  document.getElementById("gitSqlService").value = sample.dependency?.sql?.service_name || "postgres";
+  document.getElementById("gitSqlPort").value = sample.dependency?.sql?.port || 5432;
   document.getElementById("gitSqlDb").value = sample.dependency?.sql?.database || "AppDb";
-  document.getElementById("gitSqlUser").value = sample.dependency?.sql?.username || "sa";
+  document.getElementById("gitSqlUser").value = sample.dependency?.sql?.username || "postgres";
   document.getElementById("gitSqlPass").value = sample.dependency?.sql?.password || "";
   document.getElementById("gitSqlEnv").value = sample.dependency?.sql?.connection_env || "ConnectionStrings__DefaultConnection";
   document.getElementById("gitMigrationEnabled").value = sample.migration?.enabled ? "true" : "false";
-  document.getElementById("gitMigrationImage").value = sample.migration?.image || "lenovo:8443/library/dotnet-sdk:8.0";
-  document.getElementById("gitMigrationCmd").value = Array.isArray(sample.migration?.command) ? sample.migration.command.join(",") : "dotnet,ef,database,update";
+  document.getElementById("gitMigrationImage").value = sample.migration?.image || "";
+  document.getElementById("gitMigrationCmd").value = Array.isArray(sample.migration?.command) ? sample.migration.command.join(",") : "";
   document.getElementById("gitMigrationArgs").value = Array.isArray(sample.migration?.args) ? sample.migration.args.join(",") : "";
   document.getElementById("gitMigrationEnv").value = sample.migration?.env_name || "ConnectionStrings__DefaultConnection";
   updateGitDependencyVisibility();
@@ -1188,16 +1188,16 @@ function fillZipForm(sample) {
   document.getElementById("zipRedisService").value = sample.dependency?.redis?.service_name || "redis";
   document.getElementById("zipRedisPort").value = sample.dependency?.redis?.port || 6379;
   document.getElementById("zipRedisEnv").value = sample.dependency?.redis?.connection_env || "ConnectionStrings__Redis";
-  document.getElementById("zipSqlImage").value = sample.dependency?.sql?.image || "lenovo:8443/library/mssql-server:2022-latest";
-  document.getElementById("zipSqlService").value = sample.dependency?.sql?.service_name || "sql";
-  document.getElementById("zipSqlPort").value = sample.dependency?.sql?.port || 1433;
+  document.getElementById("zipSqlImage").value = sample.dependency?.sql?.image || "lenovo:8443/library/postgres:16-alpine";
+  document.getElementById("zipSqlService").value = sample.dependency?.sql?.service_name || "postgres";
+  document.getElementById("zipSqlPort").value = sample.dependency?.sql?.port || 5432;
   document.getElementById("zipSqlDb").value = sample.dependency?.sql?.database || "AppDb";
-  document.getElementById("zipSqlUser").value = sample.dependency?.sql?.username || "sa";
+  document.getElementById("zipSqlUser").value = sample.dependency?.sql?.username || "postgres";
   document.getElementById("zipSqlPass").value = sample.dependency?.sql?.password || "";
   document.getElementById("zipSqlEnv").value = sample.dependency?.sql?.connection_env || "ConnectionStrings__DefaultConnection";
   document.getElementById("zipMigrationEnabled").value = sample.migration?.enabled ? "true" : "false";
-  document.getElementById("zipMigrationImage").value = sample.migration?.image || "lenovo:8443/library/dotnet-sdk:8.0";
-  document.getElementById("zipMigrationCmd").value = Array.isArray(sample.migration?.command) ? sample.migration.command.join(",") : "dotnet,ef,database,update";
+  document.getElementById("zipMigrationImage").value = sample.migration?.image || "";
+  document.getElementById("zipMigrationCmd").value = Array.isArray(sample.migration?.command) ? sample.migration.command.join(",") : "";
   document.getElementById("zipMigrationArgs").value = Array.isArray(sample.migration?.args) ? sample.migration.args.join(",") : "";
   document.getElementById("zipMigrationEnv").value = sample.migration?.env_name || "ConnectionStrings__DefaultConnection";
   updateDependencyVisibility("zip");
@@ -1217,16 +1217,16 @@ function fillLocalForm(sample) {
   document.getElementById("localRedisService").value = sample.dependency?.redis?.service_name || "redis";
   document.getElementById("localRedisPort").value = sample.dependency?.redis?.port || 6379;
   document.getElementById("localRedisEnv").value = sample.dependency?.redis?.connection_env || "ConnectionStrings__Redis";
-  document.getElementById("localSqlImage").value = sample.dependency?.sql?.image || "lenovo:8443/library/mssql-server:2022-latest";
-  document.getElementById("localSqlService").value = sample.dependency?.sql?.service_name || "sql";
-  document.getElementById("localSqlPort").value = sample.dependency?.sql?.port || 1433;
+  document.getElementById("localSqlImage").value = sample.dependency?.sql?.image || "lenovo:8443/library/postgres:16-alpine";
+  document.getElementById("localSqlService").value = sample.dependency?.sql?.service_name || "postgres";
+  document.getElementById("localSqlPort").value = sample.dependency?.sql?.port || 5432;
   document.getElementById("localSqlDb").value = sample.dependency?.sql?.database || "AppDb";
-  document.getElementById("localSqlUser").value = sample.dependency?.sql?.username || "sa";
+  document.getElementById("localSqlUser").value = sample.dependency?.sql?.username || "postgres";
   document.getElementById("localSqlPass").value = sample.dependency?.sql?.password || "";
   document.getElementById("localSqlEnv").value = sample.dependency?.sql?.connection_env || "ConnectionStrings__DefaultConnection";
   document.getElementById("localMigrationEnabled").value = sample.migration?.enabled ? "true" : "false";
-  document.getElementById("localMigrationImage").value = sample.migration?.image || "lenovo:8443/library/dotnet-sdk:8.0";
-  document.getElementById("localMigrationCmd").value = Array.isArray(sample.migration?.command) ? sample.migration.command.join(",") : "dotnet,ef,database,update";
+  document.getElementById("localMigrationImage").value = sample.migration?.image || "";
+  document.getElementById("localMigrationCmd").value = Array.isArray(sample.migration?.command) ? sample.migration.command.join(",") : "";
   document.getElementById("localMigrationArgs").value = Array.isArray(sample.migration?.args) ? sample.migration.args.join(",") : "";
   document.getElementById("localMigrationEnv").value = sample.migration?.env_name || "ConnectionStrings__DefaultConnection";
   updateDependencyVisibility("local");
@@ -1317,19 +1317,19 @@ const sampleGit = {
       connection_env: "ConnectionStrings__Redis"
     },
     sql: {
-      image: "lenovo:8443/library/mssql-server:2022-latest",
-      service_name: "sql",
-      port: 1433,
+      image: "lenovo:8443/library/postgres:16-alpine",
+      service_name: "postgres",
+      port: 5432,
       database: "AppDb",
-      username: "sa",
+      username: "postgres",
       password: "StrongPass_123!",
       connection_env: "ConnectionStrings__DefaultConnection"
     }
   },
   migration: {
     enabled: true,
-    image: "lenovo:8443/library/dotnet-sdk:8.0",
-    command: ["dotnet", "ef", "database", "update"],
+    image: "",
+    command: [],
     args: [],
     env_name: "ConnectionStrings__DefaultConnection"
   }
@@ -1357,19 +1357,19 @@ const sampleZip = {
       connection_env: "ConnectionStrings__Redis"
     },
     sql: {
-      image: "lenovo:8443/library/mssql-server:2022-latest",
-      service_name: "sql",
-      port: 1433,
+      image: "lenovo:8443/library/postgres:16-alpine",
+      service_name: "postgres",
+      port: 5432,
       database: "AppDb",
-      username: "sa",
+      username: "postgres",
       password: "StrongPass_123!",
       connection_env: "ConnectionStrings__DefaultConnection"
     }
   },
   migration: {
     enabled: true,
-    image: "lenovo:8443/library/dotnet-sdk:8.0",
-    command: ["dotnet", "ef", "database", "update"],
+    image: "",
+    command: [],
     args: [],
     env_name: "ConnectionStrings__DefaultConnection"
   }
@@ -1397,19 +1397,19 @@ const sampleLocal = {
       connection_env: "ConnectionStrings__Redis"
     },
     sql: {
-      image: "lenovo:8443/library/mssql-server:2022-latest",
-      service_name: "sql",
-      port: 1433,
+      image: "lenovo:8443/library/postgres:16-alpine",
+      service_name: "postgres",
+      port: 5432,
       database: "AppDb",
-      username: "sa",
+      username: "postgres",
       password: "StrongPass_123!",
       connection_env: "ConnectionStrings__DefaultConnection"
     }
   },
   migration: {
     enabled: true,
-    image: "lenovo:8443/library/dotnet-sdk:8.0",
-    command: ["dotnet", "ef", "database", "update"],
+    image: "",
+    command: [],
     args: [],
     env_name: "ConnectionStrings__DefaultConnection"
   }

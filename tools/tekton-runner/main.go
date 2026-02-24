@@ -1733,8 +1733,9 @@ func handleZipDeploy(in Input, targets []AppTarget, taskRuns map[string]string, 
 		"type": in.Dependency.Type,
 	})
 	if in.Migration.Enabled {
+		leadImage := fmt.Sprintf("%s/%s/%s:%s", in.Image.Registry, strings.ToLower(targets[0].Project), strings.ToLower(targets[0].Project), targets[0].Tag)
 		emitRunEvent(runID, workspace, leadApp, "migration", "running", "Running migration job", nil)
-		if err := runMigrationJob(kcfgPath, clusterName, leadApp, in.Migration, envRefs); err != nil {
+		if err := runMigrationJob(kcfgPath, clusterName, leadApp, in.Migration, envRefs, leadImage); err != nil {
 			emitRunEvent(runID, workspace, leadApp, "migration", "failed", err.Error(), nil)
 			return err
 		}
@@ -2015,17 +2016,17 @@ func ensureWorkspaceDependencies(kubeconfig, namespace, app string, dep Dependen
 		}
 		authSecretName := depName + "-auth"
 		if err := kubectlApplyWithKubeconfig(kubeconfig, renderOpaqueSecret(namespace, authSecretName, map[string]string{
-			"sa-password": dep.SQL.Password,
+			"db-password": dep.SQL.Password,
 		})); err != nil {
 			return nil, fmt.Errorf("apply sql auth secret failed: %v", err)
 		}
-		if err := kubectlApplyWithKubeconfig(kubeconfig, renderSQLManifest(namespace, depName, dep.SQL.Image, dep.SQL.Port, authSecretName)); err != nil {
+		if err := kubectlApplyWithKubeconfig(kubeconfig, renderSQLManifest(namespace, depName, dep.SQL.Image, dep.SQL.Port, authSecretName, dep.SQL.Database, dep.SQL.Username)); err != nil {
 			return nil, fmt.Errorf("apply sql dependency failed: %v", err)
 		}
 		if err := waitForDeploymentReady(kubeconfig, namespace, depName, 6*time.Minute); err != nil {
 			return nil, fmt.Errorf("sql dependency not ready: %v", err)
 		}
-		conn := fmt.Sprintf("Server=tcp:%s.%s.svc.cluster.local,%d;Initial Catalog=%s;User ID=%s;Password=%s;Encrypt=False;TrustServerCertificate=True;", depName, namespace, dep.SQL.Port, dep.SQL.Database, dep.SQL.Username, dep.SQL.Password)
+		conn := fmt.Sprintf("Host=%s.%s.svc.cluster.local;Port=%d;Database=%s;Username=%s;Password=%s;SSL Mode=Disable;", depName, namespace, dep.SQL.Port, dep.SQL.Database, dep.SQL.Username, dep.SQL.Password)
 		secretName := app + "-app-config"
 		if err := kubectlApplyWithKubeconfig(kubeconfig, renderOpaqueSecret(namespace, secretName, map[string]string{
 			"sql-conn": conn,
@@ -2056,17 +2057,17 @@ func ensureWorkspaceDependencies(kubeconfig, namespace, app string, dep Dependen
 		}
 		authSecretName := sqlName + "-auth"
 		if err := kubectlApplyWithKubeconfig(kubeconfig, renderOpaqueSecret(namespace, authSecretName, map[string]string{
-			"sa-password": dep.SQL.Password,
+			"db-password": dep.SQL.Password,
 		})); err != nil {
 			return nil, fmt.Errorf("apply sql auth secret failed: %v", err)
 		}
-		if err := kubectlApplyWithKubeconfig(kubeconfig, renderSQLManifest(namespace, sqlName, dep.SQL.Image, dep.SQL.Port, authSecretName)); err != nil {
+		if err := kubectlApplyWithKubeconfig(kubeconfig, renderSQLManifest(namespace, sqlName, dep.SQL.Image, dep.SQL.Port, authSecretName, dep.SQL.Database, dep.SQL.Username)); err != nil {
 			return nil, fmt.Errorf("apply sql dependency failed: %v", err)
 		}
 		if err := waitForDeploymentReady(kubeconfig, namespace, sqlName, 6*time.Minute); err != nil {
 			return nil, fmt.Errorf("sql dependency not ready: %v", err)
 		}
-		sqlConn := fmt.Sprintf("Server=tcp:%s.%s.svc.cluster.local,%d;Initial Catalog=%s;User ID=%s;Password=%s;Encrypt=False;TrustServerCertificate=True;", sqlName, namespace, dep.SQL.Port, dep.SQL.Database, dep.SQL.Username, dep.SQL.Password)
+		sqlConn := fmt.Sprintf("Host=%s.%s.svc.cluster.local;Port=%d;Database=%s;Username=%s;Password=%s;SSL Mode=Disable;", sqlName, namespace, dep.SQL.Port, dep.SQL.Database, dep.SQL.Username, dep.SQL.Password)
 		secretName := app + "-app-config"
 		if err := kubectlApplyWithKubeconfig(kubeconfig, renderOpaqueSecret(namespace, secretName, map[string]string{
 			"redis-conn": redisConn,
@@ -2091,7 +2092,7 @@ func ensureWorkspaceDependencies(kubeconfig, namespace, app string, dep Dependen
 	}
 }
 
-func runMigrationJob(kubeconfig, namespace, app string, m Migration, envRefs []AppEnvSecretRef) error {
+func runMigrationJob(kubeconfig, namespace, app string, m Migration, envRefs []AppEnvSecretRef, defaultImage string) error {
 	secretName := ""
 	secretKey := ""
 	for _, ref := range envRefs {
@@ -2104,13 +2105,20 @@ func runMigrationJob(kubeconfig, namespace, app string, m Migration, envRefs []A
 	if secretName == "" || secretKey == "" {
 		return fmt.Errorf("migration env %s secret reference not found", m.EnvName)
 	}
+	image := strings.TrimSpace(m.Image)
+	if image == "" {
+		image = strings.TrimSpace(defaultImage)
+	}
+	if image == "" {
+		return fmt.Errorf("migration image is empty (set migration.image or ensure deploy image is resolved)")
+	}
 
 	jobName := sanitizeName(app + "-migrate-" + randSuffix())
 	if len(jobName) > 63 {
 		jobName = jobName[:63]
 		jobName = strings.Trim(jobName, "-")
 	}
-	manifest := renderMigrationJob(namespace, jobName, m, secretName, secretKey)
+	manifest := renderMigrationJob(namespace, jobName, image, m, secretName, secretKey)
 	if err := kubectlApplyWithKubeconfig(kubeconfig, manifest); err != nil {
 		return fmt.Errorf("apply migration job failed: %v", err)
 	}
@@ -2124,7 +2132,7 @@ func runMigrationJob(kubeconfig, namespace, app string, m Migration, envRefs []A
 	return nil
 }
 
-func renderMigrationJob(namespace, name string, m Migration, secretName, secretKey string) string {
+func renderMigrationJob(namespace, name, image string, m Migration, secretName, secretKey string) string {
 	var b strings.Builder
 	b.WriteString("apiVersion: batch/v1\n")
 	b.WriteString("kind: Job\n")
@@ -2138,13 +2146,21 @@ func renderMigrationJob(namespace, name string, m Migration, secretName, secretK
 	b.WriteString("      restartPolicy: Never\n")
 	b.WriteString("      containers:\n")
 	b.WriteString("        - name: migrate\n")
-	b.WriteString("          image: " + m.Image + "\n")
+	b.WriteString("          image: " + image + "\n")
 	b.WriteString("          env:\n")
 	b.WriteString("            - name: " + m.EnvName + "\n")
 	b.WriteString("              valueFrom:\n")
 	b.WriteString("                secretKeyRef:\n")
 	b.WriteString("                  name: " + secretName + "\n")
 	b.WriteString("                  key: " + secretKey + "\n")
+	if len(m.Command) == 0 {
+		b.WriteString("          command:\n")
+		b.WriteString("            - /bin/sh\n")
+		b.WriteString("            - -lc\n")
+		b.WriteString("          args:\n")
+		b.WriteString("            - " + yamlQuote(defaultMigrationAutoScript()) + "\n")
+		return b.String()
+	}
 	if len(m.Command) > 0 {
 		b.WriteString("          command:\n")
 		for _, c := range m.Command {
@@ -2158,6 +2174,10 @@ func renderMigrationJob(namespace, name string, m Migration, secretName, secretK
 		}
 	}
 	return b.String()
+}
+
+func defaultMigrationAutoScript() string {
+	return "set -e; for c in ./migrate ./migrate.sh /app/migrate /app/migrate.sh /workspace/migrate /workspace/migrate.sh; do if [ -x \"$c\" ]; then echo \"running migration via $c\"; exec \"$c\"; fi; done; echo \"no migration command found in image. Set migration.command or add executable /app/migrate(.sh)\"; exit 1"
 }
 
 func waitForJobComplete(kubeconfig, namespace, name string, timeout time.Duration) error {
@@ -2237,7 +2257,7 @@ spec:
 	})
 }
 
-func renderSQLManifest(namespace, name, image string, port int, authSecretName string) string {
+func renderSQLManifest(namespace, name, image string, port int, authSecretName, database, username string) string {
 	tpl := `apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -2257,17 +2277,15 @@ spec:
         - name: {{.Name}}
           image: {{.Image}}
           env:
-            - name: ACCEPT_EULA
-              value: "Y"
-            - name: MSSQL_PID
-              value: "Developer"
-            - name: MSSQL_MEMORY_LIMIT_MB
-              value: "1024"
-            - name: SA_PASSWORD
+            - name: POSTGRES_DB
+              value: {{.Database}}
+            - name: POSTGRES_USER
+              value: {{.Username}}
+            - name: POSTGRES_PASSWORD
               valueFrom:
                 secretKeyRef:
                   name: {{.AuthSecretName}}
-                  key: sa-password
+                  key: db-password
           resources:
             requests:
               cpu: "250m"
@@ -2302,6 +2320,8 @@ spec:
 		"Image":          image,
 		"Port":           fmt.Sprintf("%d", port),
 		"AuthSecretName": authSecretName,
+		"Database":       yamlQuote(database),
+		"Username":       yamlQuote(username),
 	})
 }
 
@@ -3944,19 +3964,34 @@ func setDefaults(in *Input) {
 		in.Dependency.Redis.ConnectionEnv = "ConnectionStrings__Redis"
 	}
 	if in.Dependency.SQL.Image == "" {
-		in.Dependency.SQL.Image = "lenovo:8443/library/mssql-server:2022-latest"
+		in.Dependency.SQL.Image = "lenovo:8443/library/postgres:16-alpine"
 	}
 	if in.Dependency.SQL.ServiceName == "" {
-		in.Dependency.SQL.ServiceName = "sql"
+		in.Dependency.SQL.ServiceName = "postgres"
 	}
 	if in.Dependency.SQL.Port == 0 {
-		in.Dependency.SQL.Port = 1433
+		in.Dependency.SQL.Port = 5432
 	}
 	if in.Dependency.SQL.Username == "" {
-		in.Dependency.SQL.Username = "sa"
+		in.Dependency.SQL.Username = "postgres"
 	}
 	if in.Dependency.SQL.ConnectionEnv == "" {
 		in.Dependency.SQL.ConnectionEnv = "ConnectionStrings__DefaultConnection"
+	}
+	if in.Dependency.Type == "sql" || in.Dependency.Type == "both" {
+		img := strings.ToLower(strings.TrimSpace(in.Dependency.SQL.Image))
+		if img == "" || strings.Contains(img, "mssql") {
+			in.Dependency.SQL.Image = "lenovo:8443/library/postgres:16-alpine"
+		}
+		if in.Dependency.SQL.ServiceName == "" || strings.EqualFold(in.Dependency.SQL.ServiceName, "sql") {
+			in.Dependency.SQL.ServiceName = "postgres"
+		}
+		if in.Dependency.SQL.Port == 0 || in.Dependency.SQL.Port == 1433 {
+			in.Dependency.SQL.Port = 5432
+		}
+		if in.Dependency.SQL.Username == "" || strings.EqualFold(in.Dependency.SQL.Username, "sa") {
+			in.Dependency.SQL.Username = "postgres"
+		}
 	}
 	if in.Migration.EnvName == "" {
 		in.Migration.EnvName = "ConnectionStrings__DefaultConnection"
@@ -4029,11 +4064,8 @@ func validate(in *Input) error {
 		if in.Dependency.Type != "sql" && in.Dependency.Type != "both" {
 			return fmt.Errorf("migration.enabled requires dependency.type=sql or both")
 		}
-		if strings.TrimSpace(in.Migration.Image) == "" {
-			return fmt.Errorf("migration.image is required when migration.enabled=true")
-		}
-		if len(in.Migration.Command) == 0 {
-			return fmt.Errorf("migration.command is required when migration.enabled=true")
+		if len(in.Migration.Command) == 0 && len(in.Migration.Args) > 0 {
+			return fmt.Errorf("migration.args requires migration.command when migration.enabled=true")
 		}
 	}
 	return nil
