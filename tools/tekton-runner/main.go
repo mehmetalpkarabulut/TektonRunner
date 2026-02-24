@@ -1712,6 +1712,12 @@ func handleZipDeploy(in Input, targets []AppTarget, taskRuns map[string]string, 
 		return err
 	}
 	emitRunEvent(runID, workspace, leadApp, "workspace", "succeeded", "Workspace cluster ready", nil)
+	if err := ensureNamespaceWithKubeconfig(kcfgPath, clusterName); err != nil {
+		emitRunEvent(runID, workspace, leadApp, "workspace", "failed", "Workspace namespace ensure failed", map[string]string{
+			"namespace": clusterName,
+		})
+		return fmt.Errorf("ensure workspace namespace failed: %v", err)
+	}
 
 	emitRunEvent(runID, workspace, leadApp, "dependency", "running", "Applying dependencies", map[string]string{
 		"type": in.Dependency.Type,
@@ -1950,9 +1956,29 @@ func renderEnvFromSecretBlock(envRefs []AppEnvSecretRef) string {
 func kubectlApplyWithKubeconfig(kubeconfig, manifest string) error {
 	cmd := exec.Command("kubectl", "--kubeconfig", kubeconfig, "apply", "-f", "-")
 	cmd.Stdin = strings.NewReader(manifest)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	return cmd.Run()
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		msg := strings.TrimSpace(string(out))
+		if msg == "" {
+			return err
+		}
+		return fmt.Errorf("%v: %s", err, msg)
+	}
+	if len(out) > 0 {
+		_, _ = os.Stdout.Write(out)
+	}
+	return nil
+}
+
+func ensureNamespaceWithKubeconfig(kubeconfig, namespace string) error {
+	manifest := mustRender(`apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{.Namespace}}
+`, map[string]string{
+		"Namespace": namespace,
+	})
+	return kubectlApplyWithKubeconfig(kubeconfig, manifest)
 }
 
 func ensureWorkspaceDependencies(kubeconfig, namespace, app string, dep Dependency) ([]AppEnvSecretRef, error) {
