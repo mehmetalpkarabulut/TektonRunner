@@ -739,9 +739,15 @@ func runServer(addr, apiKey string) {
 			http.Error(w, err.Error(), http.StatusNotFound)
 			return
 		}
-		host := serverHostIP
+		host := strings.TrimSpace(serverHostIP)
 		if host == "" {
-			host = "127.0.0.1"
+			host = strings.TrimSpace(r.Host)
+			if strings.Contains(host, ":") {
+				host = strings.Split(host, ":")[0]
+			}
+			if host == "" || host == "0.0.0.0" {
+				host = "127.0.0.1"
+			}
 		}
 		url := fmt.Sprintf("http://%s:%d", host, port)
 		serverState.mu.Lock()
@@ -2428,6 +2434,7 @@ func addConnectionURL(access map[string]string, endpoint string) {
 		} else {
 			access["url"] = fmt.Sprintf("postgresql://%s:%s/%s?sslmode=disable", host, port, db)
 		}
+		access["public_url"] = fmt.Sprintf("postgresql://%s:%s/%s?sslmode=disable", host, port, db)
 	case "redis":
 		if db == "" {
 			db = "0"
@@ -2437,6 +2444,7 @@ func addConnectionURL(access map[string]string, endpoint string) {
 		} else {
 			access["url"] = fmt.Sprintf("redis://%s:%s/%s", host, port, db)
 		}
+		access["public_url"] = fmt.Sprintf("redis://%s:%s/%s", host, port, db)
 	}
 }
 

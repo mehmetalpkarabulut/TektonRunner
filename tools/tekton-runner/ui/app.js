@@ -593,6 +593,7 @@ async function ensureEndpoint(ws, app) {
 
 function formatAccessInfo(access) {
   if (!access || typeof access !== "object") return "-";
+  if (access.public_url) return access.public_url;
   if (access.url) return access.url;
   const engine = access.engine || "-";
   const username = access.username ?? "";
