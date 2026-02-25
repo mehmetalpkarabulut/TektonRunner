@@ -699,6 +699,7 @@ function renderWorkspaceDetail() {
     const endpointInfo = endpointCache[epKey] || null;
     const endpoint = endpointInfo?.endpoint || "loading...";
     const accessInfo = formatAccessInfo(endpointInfo?.access);
+    const accessPassword = endpointInfo?.access?.password ?? "-";
 
     const defaultPort = defaultExternalPort(nodePort);
     const mappedPort = getExternalPort(currentWorkspace, name);
@@ -726,7 +727,8 @@ function renderWorkspaceDetail() {
       <div class="detail-label">NodePort</div><div class="detail-value">${nodePort || "-"}</div>
       <div class="detail-label">Endpoint</div><div class="detail-value">${endpoint}</div>
       <div class="detail-label">External URL</div><div class="detail-value">${externalUrl}</div>
-      <div class="detail-label">DB URL</div><div class="detail-value">${accessInfo}</div>`;
+      <div class="detail-label">DB URL</div><div class="detail-value">${accessInfo}</div>
+      <div class="detail-label">DB Password</div><div class="detail-value">${accessPassword}</div>`;
 
     const btns = document.createElement("div");
     btns.className = "detail-actions";

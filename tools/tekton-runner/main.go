@@ -721,10 +721,14 @@ func runServer(addr, apiKey string) {
 		}
 		key := workspace + "/" + app
 		kcfgPath := filepath.Join("/home/beko/kubeconfigs", workspace+".yaml")
+		reqHost := resolveExternalHost(r)
 		serverState.mu.Lock()
 		if url, ok := serverState.endpoints[key]; ok {
 			serverState.mu.Unlock()
-			url = withResolvedHost(url, resolveExternalHost(r))
+			url = withResolvedHost(url, reqHost)
+			if extPort, ok := portStore.get(workspace, app); ok {
+				url = withResolvedPort(url, extPort)
+			}
 			w.Header().Set("Content-Type", "application/json")
 			resp := map[string]any{"endpoint": url}
 			if info, err := getDependencyAccessInfo(kcfgPath, workspace, app); err == nil && len(info) > 0 {
@@ -741,8 +745,10 @@ func runServer(addr, apiKey string) {
 			http.Error(w, err.Error(), http.StatusNotFound)
 			return
 		}
-		host := resolveExternalHost(r)
-		url := fmt.Sprintf("http://%s:%d", host, port)
+		url := fmt.Sprintf("http://%s:%d", reqHost, port)
+		if extPort, ok := portStore.get(workspace, app); ok {
+			url = withResolvedPort(url, extPort)
+		}
 		serverState.mu.Lock()
 		serverState.endpoints[key] = url
 		serverState.mu.Unlock()
@@ -1720,6 +1726,22 @@ func withResolvedHost(rawURL, host string) string {
 	} else {
 		u.Host = host
 	}
+	return u.String()
+}
+
+func withResolvedPort(rawURL string, port int) string {
+	if port <= 0 {
+		return rawURL
+	}
+	u, err := neturl.Parse(rawURL)
+	if err != nil {
+		return rawURL
+	}
+	h := u.Hostname()
+	if strings.TrimSpace(h) == "" {
+		return rawURL
+	}
+	u.Host = fmt.Sprintf("%s:%d", h, port)
 	return u.String()
 }
 
@@ -3465,6 +3487,17 @@ func (s *ExternalPortStore) list() []ExternalPortEntry {
 	out := make([]ExternalPortEntry, len(s.entries))
 	copy(out, s.entries)
 	return out
+}
+
+func (s *ExternalPortStore) get(workspace, app string) (int, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, e := range s.entries {
+		if e.Workspace == workspace && e.App == app && e.ExternalPort > 0 {
+			return e.ExternalPort, true
+		}
+	}
+	return 0, false
 }
 
 func (s *ExternalPortStore) upsert(in ExternalPortEntry) error {
