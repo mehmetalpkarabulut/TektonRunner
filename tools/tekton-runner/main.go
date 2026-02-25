@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	neturl "net/url"
 	"os"
@@ -723,6 +724,7 @@ func runServer(addr, apiKey string) {
 		serverState.mu.Lock()
 		if url, ok := serverState.endpoints[key]; ok {
 			serverState.mu.Unlock()
+			url = withResolvedHost(url, resolveExternalHost(r))
 			w.Header().Set("Content-Type", "application/json")
 			resp := map[string]any{"endpoint": url}
 			if info, err := getDependencyAccessInfo(kcfgPath, workspace, app); err == nil && len(info) > 0 {
@@ -739,16 +741,7 @@ func runServer(addr, apiKey string) {
 			http.Error(w, err.Error(), http.StatusNotFound)
 			return
 		}
-		host := strings.TrimSpace(serverHostIP)
-		if host == "" {
-			host = strings.TrimSpace(r.Host)
-			if strings.Contains(host, ":") {
-				host = strings.Split(host, ":")[0]
-			}
-			if host == "" || host == "0.0.0.0" {
-				host = "127.0.0.1"
-			}
-		}
+		host := resolveExternalHost(r)
 		url := fmt.Sprintf("http://%s:%d", host, port)
 		serverState.mu.Lock()
 		serverState.endpoints[key] = url
@@ -1677,10 +1670,57 @@ func resolveExternalHost(r *http.Request) string {
 		parts := strings.Split(host, ":")
 		host = parts[0]
 	}
-	if host == "" || host == "0.0.0.0" {
+	if host == "" || host == "0.0.0.0" || host == "127.0.0.1" || strings.EqualFold(host, "localhost") {
+		if ip := detectPrimaryIPv4(); ip != "" {
+			return ip
+		}
 		return "127.0.0.1"
 	}
 	return host
+}
+
+func detectPrimaryIPv4() string {
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return ""
+	}
+	for _, iface := range ifaces {
+		if (iface.Flags&net.FlagUp) == 0 || (iface.Flags&net.FlagLoopback) != 0 {
+			continue
+		}
+		addrs, err := iface.Addrs()
+		if err != nil {
+			continue
+		}
+		for _, addr := range addrs {
+			ipNet, ok := addr.(*net.IPNet)
+			if !ok || ipNet.IP == nil {
+				continue
+			}
+			ip := ipNet.IP.To4()
+			if ip == nil || ip.IsLoopback() {
+				continue
+			}
+			if ip.IsPrivate() {
+				return ip.String()
+			}
+		}
+	}
+	return ""
+}
+
+func withResolvedHost(rawURL, host string) string {
+	u, err := neturl.Parse(rawURL)
+	if err != nil || strings.TrimSpace(host) == "" {
+		return rawURL
+	}
+	p := u.Port()
+	if p != "" {
+		u.Host = host + ":" + p
+	} else {
+		u.Host = host
+	}
+	return u.String()
 }
 
 func handleZipDeploy(in Input, targets []AppTarget, taskRuns map[string]string, runID string) error {
