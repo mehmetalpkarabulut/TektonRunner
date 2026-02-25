@@ -593,6 +593,7 @@ async function ensureEndpoint(ws, app) {
 
 function formatAccessInfo(access) {
   if (!access || typeof access !== "object") return "-";
+  if (access.url) return access.url;
   const engine = access.engine || "-";
   const username = access.username ?? "";
   const password = access.password ?? "";
@@ -724,7 +725,7 @@ function renderWorkspaceDetail() {
       <div class="detail-label">NodePort</div><div class="detail-value">${nodePort || "-"}</div>
       <div class="detail-label">Endpoint</div><div class="detail-value">${endpoint}</div>
       <div class="detail-label">External URL</div><div class="detail-value">${externalUrl}</div>
-      <div class="detail-label">Access</div><div class="detail-value">${accessInfo}</div>`;
+      <div class="detail-label">DB URL</div><div class="detail-value">${accessInfo}</div>`;
 
     const btns = document.createElement("div");
     btns.className = "detail-actions";

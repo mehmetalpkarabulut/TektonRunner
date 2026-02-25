@@ -12,6 +12,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	neturl "net/url"
 	"os"
 	"os/exec"
 	"path"
@@ -725,6 +726,7 @@ func runServer(addr, apiKey string) {
 			w.Header().Set("Content-Type", "application/json")
 			resp := map[string]any{"endpoint": url}
 			if info, err := getDependencyAccessInfo(kcfgPath, workspace, app); err == nil && len(info) > 0 {
+				addConnectionURL(info, url)
 				resp["access"] = info
 			}
 			_ = json.NewEncoder(w).Encode(resp)
@@ -748,6 +750,7 @@ func runServer(addr, apiKey string) {
 		w.Header().Set("Content-Type", "application/json")
 		resp := map[string]any{"endpoint": url}
 		if info, err := getDependencyAccessInfo(kcfgPath, workspace, app); err == nil && len(info) > 0 {
+			addConnectionURL(info, url)
 			resp["access"] = info
 		}
 		_ = json.NewEncoder(w).Encode(resp)
@@ -2393,6 +2396,47 @@ func getDependencyAccessInfo(kubeconfig, namespace, app string) (map[string]stri
 		}, nil
 	default:
 		return nil, nil
+	}
+}
+
+func addConnectionURL(access map[string]string, endpoint string) {
+	if len(access) == 0 || endpoint == "" {
+		return
+	}
+	parsed, err := neturl.Parse(endpoint)
+	if err != nil {
+		return
+	}
+	host := parsed.Hostname()
+	port := parsed.Port()
+	engine := strings.ToLower(strings.TrimSpace(access["engine"]))
+	user := access["username"]
+	pass := access["password"]
+	db := access["database"]
+
+	switch engine {
+	case "postgres":
+		if db == "" {
+			db = "postgres"
+		}
+		cred := user
+		if pass != "" {
+			cred = neturl.QueryEscape(user) + ":" + neturl.QueryEscape(pass)
+		}
+		if cred != "" {
+			access["url"] = fmt.Sprintf("postgresql://%s@%s:%s/%s?sslmode=disable", cred, host, port, db)
+		} else {
+			access["url"] = fmt.Sprintf("postgresql://%s:%s/%s?sslmode=disable", host, port, db)
+		}
+	case "redis":
+		if db == "" {
+			db = "0"
+		}
+		if pass != "" {
+			access["url"] = fmt.Sprintf("redis://:%s@%s:%s/%s", neturl.QueryEscape(pass), host, port, db)
+		} else {
+			access["url"] = fmt.Sprintf("redis://%s:%s/%s", host, port, db)
+		}
 	}
 }
 
