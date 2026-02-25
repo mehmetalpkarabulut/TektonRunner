@@ -582,10 +582,22 @@ async function ensureEndpoint(ws, app) {
   endpointInFlight[key] = true;
   const res = await handleRequest("GET", `/endpoint?workspace=${encodeURIComponent(ws)}&app=${encodeURIComponent(app)}`, {}, true);
   if (res.status === 200 && res.body?.endpoint) {
-    endpointCache[key] = res.body.endpoint;
+    endpointCache[key] = {
+      endpoint: res.body.endpoint,
+      access: res.body?.access || null,
+    };
     renderWorkspaceDetail();
   }
   delete endpointInFlight[key];
+}
+
+function formatAccessInfo(access) {
+  if (!access || typeof access !== "object") return "-";
+  const engine = access.engine || "-";
+  const username = access.username ?? "";
+  const password = access.password ?? "";
+  const database = access.database ?? "";
+  return `engine=${engine} user=${username} pass=${password} db=${database}`;
 }
 
 function prefetchEndpoints(ws) {
@@ -682,7 +694,9 @@ function renderWorkspaceDetail() {
     const counts = getPodCounts(status, name);
     const nodePort = getServicePort(status, name);
     const epKey = endpointKey(currentWorkspace, name);
-    const endpoint = endpointCache[epKey] || "loading...";
+    const endpointInfo = endpointCache[epKey] || null;
+    const endpoint = endpointInfo?.endpoint || "loading...";
+    const accessInfo = formatAccessInfo(endpointInfo?.access);
 
     const defaultPort = defaultExternalPort(nodePort);
     const mappedPort = getExternalPort(currentWorkspace, name);
@@ -709,7 +723,8 @@ function renderWorkspaceDetail() {
       <div class="detail-label">Pods</div><div class="detail-value">${counts.running}/${counts.total}</div>
       <div class="detail-label">NodePort</div><div class="detail-value">${nodePort || "-"}</div>
       <div class="detail-label">Endpoint</div><div class="detail-value">${endpoint}</div>
-      <div class="detail-label">External URL</div><div class="detail-value">${externalUrl}</div>`;
+      <div class="detail-label">External URL</div><div class="detail-value">${externalUrl}</div>
+      <div class="detail-label">Access</div><div class="detail-value">${accessInfo}</div>`;
 
     const btns = document.createElement("div");
     btns.className = "detail-actions";
