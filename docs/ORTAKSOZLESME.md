@@ -10,6 +10,26 @@ Bu dokuman, Tekton Runner platformuna deploy edilecek yeni repo/proje ureten tum
 
 Bu sozlesme .NET tabanli servisler icin zorunlu; diger stackler icin de referans model olarak kullanilir.
 
+## 1.1 Staging Icin Zorunlu Minimum Kurallar
+
+1. Uygulama su env anahtarlarini kullanmali:
+- `ConnectionStrings__DefaultConnection`
+- `ConnectionStrings__Redis`
+
+2. Baglanti string parse esnek olmalidir:
+- PostgreSQL icin hem `Host=...;Port=...` hem URL formati desteklenmeli.
+- Redis icin `host:port` gelirse otomatik `redis://` eklenmeli.
+
+3. Staging'de migration adimi pipeline disi tutulur:
+- `migration.enabled=false`
+- Uygulama startup'ta semayi kendisi hazirlar (`Migrate` / `EnsureCreated` / `CREATE TABLE IF NOT EXISTS`).
+
+4. Tekton dependency secimi:
+- DB+cache gereken servislerde `dependency.type=both`.
+
+5. Operasyon:
+- Ayni workspace/app icin eszamanli birden fazla tetikleme yapilmaz.
+
 ## 2. Zorunlu Repo Icerigi
 
 Her repo asagidakileri icermelidir:
