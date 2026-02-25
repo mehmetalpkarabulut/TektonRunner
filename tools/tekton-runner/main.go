@@ -3323,10 +3323,8 @@ func ensureForward(workspace, app string, externalPort int) error {
 
 	forwardMu.Lock()
 	if fwd, ok := forwards[key]; ok && fwd != nil && fwd.Cmd != nil && fwd.Cmd.Process != nil {
-		if fwd.Port == externalPort {
-			forwardMu.Unlock()
-			return nil
-		}
+		// Always recreate forward to avoid stale nodeIP/nodePort targets
+		// after kind workspace recreations.
 		_ = fwd.Cmd.Process.Kill()
 		delete(forwards, key)
 	}
