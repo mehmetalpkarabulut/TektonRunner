@@ -18,6 +18,7 @@ body {
   margin: 0;
   color: var(--text);
   font-family: var(--sans);
+  font-size: 14px;
   background: radial-gradient(1200px 700px at 15% -10%, #22344d 0%, transparent 65%),
               radial-gradient(900px 600px at 85% 10%, #0f3b4b 0%, transparent 60%),
               linear-gradient(180deg, #0a0f15 0%, #0b1118 100%);
