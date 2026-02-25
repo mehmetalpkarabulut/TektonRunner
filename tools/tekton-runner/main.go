@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"flag"
@@ -717,16 +718,20 @@ func runServer(addr, apiKey string) {
 			return
 		}
 		key := workspace + "/" + app
+		kcfgPath := filepath.Join("/home/beko/kubeconfigs", workspace+".yaml")
 		serverState.mu.Lock()
 		if url, ok := serverState.endpoints[key]; ok {
 			serverState.mu.Unlock()
 			w.Header().Set("Content-Type", "application/json")
-			w.Write([]byte(fmt.Sprintf(`{"endpoint":"%s"}`, url)))
+			resp := map[string]any{"endpoint": url}
+			if info, err := getDependencyAccessInfo(kcfgPath, workspace, app); err == nil && len(info) > 0 {
+				resp["access"] = info
+			}
+			_ = json.NewEncoder(w).Encode(resp)
 			return
 		}
 		serverState.mu.Unlock()
 
-		kcfgPath := filepath.Join("/home/beko/kubeconfigs", workspace+".yaml")
 		port, err := getServiceNodePort(kcfgPath, workspace, app)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusNotFound)
@@ -741,7 +746,11 @@ func runServer(addr, apiKey string) {
 		serverState.endpoints[key] = url
 		serverState.mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(fmt.Sprintf(`{"endpoint":"%s"}`, url)))
+		resp := map[string]any{"endpoint": url}
+		if info, err := getDependencyAccessInfo(kcfgPath, workspace, app); err == nil && len(info) > 0 {
+			resp["access"] = info
+		}
+		_ = json.NewEncoder(w).Encode(resp)
 	})
 
 	http.HandleFunc("/workspaces", func(w http.ResponseWriter, r *http.Request) {
@@ -2367,6 +2376,113 @@ func getServiceNodePort(kubeconfig, namespace, app string) (int, error) {
 		return 0, fmt.Errorf("invalid nodePort: %s", portStr)
 	}
 	return port, nil
+}
+
+func getDependencyAccessInfo(kubeconfig, namespace, app string) (map[string]string, error) {
+	name := strings.ToLower(strings.TrimSpace(app))
+	switch name {
+	case "postgres", "sql":
+		return getPostgresAccessInfo(kubeconfig, namespace, app)
+	case "redis":
+		// Current redis deployment does not configure auth; expose defaults.
+		return map[string]string{
+			"engine":   "redis",
+			"username": "",
+			"password": "",
+			"database": "0",
+		}, nil
+	default:
+		return nil, nil
+	}
+}
+
+func getPostgresAccessInfo(kubeconfig, namespace, app string) (map[string]string, error) {
+	type envVar struct {
+		Name      string `json:"name"`
+		Value     string `json:"value"`
+		ValueFrom *struct {
+			SecretKeyRef *struct {
+				Name string `json:"name"`
+				Key  string `json:"key"`
+			} `json:"secretKeyRef"`
+		} `json:"valueFrom"`
+	}
+	type depResp struct {
+		Spec struct {
+			Template struct {
+				Spec struct {
+					Containers []struct {
+						Env []envVar `json:"env"`
+					} `json:"containers"`
+				} `json:"spec"`
+			} `json:"template"`
+		} `json:"spec"`
+	}
+
+	cmd := exec.Command("kubectl", "--kubeconfig", kubeconfig, "-n", namespace, "get", "deployment", app, "-o", "json")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return nil, fmt.Errorf("get postgres deployment failed: %v", err)
+	}
+
+	var dep depResp
+	if err := json.Unmarshal(out, &dep); err != nil {
+		return nil, err
+	}
+	if len(dep.Spec.Template.Spec.Containers) == 0 {
+		return nil, fmt.Errorf("postgres deployment has no containers")
+	}
+
+	db := ""
+	user := ""
+	pass := ""
+	passSecret := ""
+	passKey := ""
+	for _, ev := range dep.Spec.Template.Spec.Containers[0].Env {
+		switch ev.Name {
+		case "POSTGRES_DB":
+			db = ev.Value
+		case "POSTGRES_USER":
+			user = ev.Value
+		case "POSTGRES_PASSWORD":
+			if ev.Value != "" {
+				pass = ev.Value
+			}
+			if ev.ValueFrom != nil && ev.ValueFrom.SecretKeyRef != nil {
+				passSecret = ev.ValueFrom.SecretKeyRef.Name
+				passKey = ev.ValueFrom.SecretKeyRef.Key
+			}
+		}
+	}
+	if pass == "" && passSecret != "" && passKey != "" {
+		if sec, err := getSecretStringData(kubeconfig, namespace, passSecret, passKey); err == nil {
+			pass = sec
+		}
+	}
+
+	return map[string]string{
+		"engine":   "postgres",
+		"username": user,
+		"password": pass,
+		"database": db,
+	}, nil
+}
+
+func getSecretStringData(kubeconfig, namespace, secretName, key string) (string, error) {
+	cmd := exec.Command("kubectl", "--kubeconfig", kubeconfig, "-n", namespace, "get", "secret", secretName, "-o", "jsonpath={.data."+key+"}")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("get secret failed: %v", err)
+	}
+	b64 := strings.TrimSpace(string(out))
+	if b64 == "" {
+		return "", fmt.Errorf("secret value is empty")
+	}
+	raw, err := base64.StdEncoding.DecodeString(b64)
+	if err != nil {
+		return "", err
+	}
+	return string(raw), nil
 }
 
 func listWorkspaces() ([]byte, error) {
