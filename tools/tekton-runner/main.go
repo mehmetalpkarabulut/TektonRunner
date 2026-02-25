@@ -2242,7 +2242,7 @@ metadata:
   name: {{.Name}}
   namespace: {{.Namespace}}
 spec:
-  type: ClusterIP
+  type: NodePort
   selector:
     app: {{.Name}}
   ports:
