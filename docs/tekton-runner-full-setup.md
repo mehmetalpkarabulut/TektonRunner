@@ -170,7 +170,7 @@ Not (2026-02-23):
 
 Not (2026-03-02):
 - Farkli runtime'lar icin ortak dependency env'leri uretilir: `DATABASE_URL`, `REDIS_URL`, `DB_*`, `REDIS_*` ve `.NET` icin `ConnectionStrings__*`.
-- Multi-app deploy'da her `apps[]` girdisi icin `container_port` zorunludur.
+- Multi-app deploy'da `apps[].container_port` opsiyoneldir; runner Dockerfile `EXPOSE` bilgisinden otomatik tespit etmeyi dener.
 - Deploy sonrasi pod loglari taranir; uygulama logu baska bir portta dinledigini yaziyorsa run `deploy failed` olur.
 - `backend` isimli sibling app varsa UI/frontend app'lere `BACKEND_BASE_URL`, `BACKEND_URL`, `API_BASE_URL`, `VITE_API_BASE_URL`, `NEXT_PUBLIC_API_URL` otomatik eklenir.
 

@@ -53,7 +53,8 @@ Beklenen:
 - Servis olusmus olmali
 
 Multi-app notu:
-- `backend` ve `ui` gibi farkli uygulamalar varsa `container_port` her app icin gercek dinleme portu olmalidir.
+- `backend` ve `ui` gibi farkli uygulamalar varsa `container_port` verilirse gercek dinleme portu olmalidir.
+- `container_port` verilmezse runner Dockerfile `EXPOSE` bilgisinden portu otomatik bulmayi dener.
 - Ornek: FastAPI/Uvicorn `8000`, Streamlit `8501`.
 - Yeni runner surumunde loglardan port uyuşmazligi yakalanir ve deploy erken `failed` olur.
 

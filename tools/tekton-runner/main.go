@@ -1577,6 +1577,9 @@ func buildManifests(in *Input) ([]string, []AppTarget, error) {
 	if err := autoDiscoverZipApps(in); err != nil {
 		return nil, nil, err
 	}
+	if err := autoPopulateMissingPorts(in); err != nil {
+		return nil, nil, err
+	}
 	if err := validate(in); err != nil {
 		return nil, nil, err
 	}
@@ -1714,6 +1717,19 @@ func autoAppBaseName(contextSub, appName, imageProject string) string {
 }
 
 func discoverZipDockerfileContexts(zipURL, zipUser, zipPass string) ([]string, error) {
+	ctxPorts, err := discoverZipDockerfilePorts(zipURL, zipUser, zipPass)
+	if err != nil {
+		return nil, err
+	}
+	contexts := make([]string, 0, len(ctxPorts))
+	for ctx := range ctxPorts {
+		contexts = append(contexts, ctx)
+	}
+	sort.Strings(contexts)
+	return contexts, nil
+}
+
+func discoverZipDockerfilePorts(zipURL, zipUser, zipPass string) (map[string]int, error) {
 	tmp, err := os.CreateTemp("", "runner-zip-*.zip")
 	if err != nil {
 		return nil, err
@@ -1756,8 +1772,7 @@ func discoverZipDockerfileContexts(zipURL, zipUser, zipPass string) ([]string, e
 	}
 	defer zr.Close()
 
-	seen := map[string]bool{}
-	contexts := make([]string, 0, 4)
+	contexts := map[string]int{}
 	for _, f := range zr.File {
 		if f.FileInfo().IsDir() {
 			continue
@@ -1774,12 +1789,75 @@ func discoverZipDockerfileContexts(zipURL, zipUser, zipPass string) ([]string, e
 		if dir != "." {
 			ctx = strings.TrimPrefix(path.Clean(dir), "./")
 		}
-		if !seen[ctx] {
-			seen[ctx] = true
-			contexts = append(contexts, ctx)
+		if _, ok := contexts[ctx]; !ok {
+			contexts[ctx] = 0
+		}
+		if contexts[ctx] == 0 {
+			rc, err := f.Open()
+			if err == nil {
+				data, _ := io.ReadAll(rc)
+				_ = rc.Close()
+				if p := inferExposedPortFromDockerfile(string(data)); p > 0 {
+					contexts[ctx] = p
+				}
+			}
 		}
 	}
 	return contexts, nil
+}
+
+func inferExposedPortFromDockerfile(content string) int {
+	lines := strings.Split(content, "\n")
+	re := regexp.MustCompile(`(?i)^\s*EXPOSE\s+(.+)$`)
+	for _, line := range lines {
+		m := re.FindStringSubmatch(line)
+		if len(m) < 2 {
+			continue
+		}
+		fields := strings.Fields(strings.TrimSpace(m[1]))
+		for _, field := range fields {
+			token := strings.TrimSpace(strings.SplitN(field, "/", 2)[0])
+			if token == "" {
+				continue
+			}
+			if p, err := strconv.Atoi(token); err == nil && p > 0 {
+				return p
+			}
+		}
+	}
+	return 0
+}
+
+func autoPopulateMissingPorts(in *Input) error {
+	if len(in.Apps) == 0 || in.Source.Type != "zip" || strings.TrimSpace(in.Source.ZipURL) == "" {
+		return nil
+	}
+	ctxPorts, err := discoverZipDockerfilePorts(in.Source.ZipURL, in.Source.ZipUsername, in.Source.ZipPassword)
+	if err != nil {
+		return nil
+	}
+	basePort := in.Deploy.ContainerPort
+	if basePort == 0 {
+		basePort = 8080
+	}
+	for i := range in.Apps {
+		if in.Apps[i].ContainerPort > 0 {
+			continue
+		}
+		ctx, err := normalizeContextSubDir(in.Apps[i].ContextSubDir)
+		if err != nil {
+			return fmt.Errorf("apps[%d]: %w", i, err)
+		}
+		if ctx == "" {
+			ctx = "."
+		}
+		if p := ctxPorts[ctx]; p > 0 {
+			in.Apps[i].ContainerPort = p
+		} else {
+			in.Apps[i].ContainerPort = basePort
+		}
+	}
+	return nil
 }
 
 func sanitizeZipFilename(name string) (string, error) {
@@ -2368,6 +2446,7 @@ func handleZipDeploy(in Input, targets []AppTarget, taskRuns map[string]string, 
 			})
 		}
 		appEnvRefs := append([]AppEnvSecretRef{}, envRefs...)
+		appEnvRefs = appendEnvValue(appEnvRefs, "PORT", strconv.Itoa(t.ContainerPort))
 		if backendServiceURL != "" && t.AppName != "backend" {
 			appEnvRefs = appendEnvValue(appEnvRefs, "BACKEND_BASE_URL", backendServiceURL)
 			appEnvRefs = appendEnvValue(appEnvRefs, "BACKEND_URL", backendServiceURL)
@@ -5190,9 +5269,6 @@ func validate(in *Input) error {
 		for i, app := range in.Apps {
 			if strings.TrimSpace(app.AppName) == "" {
 				return fmt.Errorf("apps[%d].app_name is required", i)
-			}
-			if app.ContainerPort <= 0 {
-				return fmt.Errorf("apps[%d].container_port is required for multi-app deploys", i)
 			}
 			if _, err := normalizeContextSubDir(app.ContextSubDir); err != nil {
 				return fmt.Errorf("apps[%d]: %w", i, err)

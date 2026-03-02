@@ -196,13 +196,14 @@ Ornek:
 
 Notlar:
 - `apps[]` verildiginde `app_name` ve `image.project` zorunlu degildir.
-- `apps[]` kullaniliyorsa her uygulama icin `container_port` zorunludur.
+- `apps[].container_port` opsiyoneldir. Verilmezse runner once Dockerfile `EXPOSE` bilgisini kullanir, bulamazsa varsayilan porta duser.
 - `apps[].project` bossa `apps[].app_name` kullanilir.
 - `apps[].tag` bossa `image.tag` (yoksa `latest`) kullanilir.
 - `context_sub_path` verilirse build context o alt klasor olur.
-- `container_port` uygulamanin gercek dinledigi port olmalidir. Ornek: FastAPI/Uvicorn cogu zaman `8000`, Streamlit `8501`.
+- `container_port` verilirse uygulamanin gercek dinledigi port olmalidir. Ornek: FastAPI/Uvicorn cogu zaman `8000`, Streamlit `8501`.
 - `source.type=zip` icin `apps[]` ve `source.context_sub_path` verilmezse, ZIP icindeki tum Dockerfile konumlari otomatik taranir ve her Dockerfile icin otomatik app olusturulur (multi-app run).
 - Deploy sonrasi pod loglari taranir; uygulama logu farkli bir listening port yaziyorsa run `deploy failed` olur.
+- Deploy edilen tum app'lere `PORT` env'i de otomatik yazilir.
 
 ### Multi-App Python Ornegi (FastAPI + Streamlit)
 
