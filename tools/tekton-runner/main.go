@@ -1916,7 +1916,8 @@ func configureKindNode(clusterName string) error {
 	node := clusterName + "-control-plane"
 	// Ensure host mapping for Harbor name inside kind node.
 	// We pin lenovo to the node's default gateway so the mapping survives host IP changes.
-	cmd := exec.Command("docker", "exec", node, "sh", "-c", `gw="$(ip route | awk '/default/ {print $3; exit}')"; [ -n "$gw" ] || gw="172.18.0.1"; if ! grep -qE "[[:space:]]lenovo$" /etc/hosts; then echo "$gw lenovo" >> /etc/hosts; fi`)
+	// Rewrite any stale entry instead of only appending once.
+	cmd := exec.Command("docker", "exec", node, "sh", "-c", `gw="$(ip route | awk '/default/ {print $3; exit}')"; [ -n "$gw" ] || gw="172.18.0.1"; tmp="$(mktemp)"; awk '$2 != "lenovo" { print }' /etc/hosts > "$tmp"; printf '%s %s\n' "$gw" lenovo >> "$tmp"; cat "$tmp" > /etc/hosts; rm -f "$tmp"`)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
@@ -3561,6 +3562,12 @@ func ensureForward(workspace, app string, externalPort int) error {
 		return fmt.Errorf("invalid external port")
 	}
 	key := forwardKey(workspace, app)
+
+	// Existing workspaces can survive host reboots while their kind node loses
+	// the registry host mapping/containerd tweaks needed for subsequent pulls.
+	if err := configureKindNode(workspace); err != nil {
+		return fmt.Errorf("prepare kind node failed: %v", err)
+	}
 
 	forwardMu.Lock()
 	if fwd, ok := forwards[key]; ok && fwd != nil && fwd.Cmd != nil && fwd.Cmd.Process != nil {
