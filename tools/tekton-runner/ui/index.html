@@ -135,7 +135,7 @@
             <div class="form-field"><label>App Name</label><input id="zipAppName" placeholder="demoapp" /></div>
             <div class="form-field"><label>Workspace</label><input id="zipWorkspace" placeholder="ws-demo" /></div>
             <div class="form-field"><label>Zip URL</label><input id="zipUrl" placeholder="http://.../app.zip" /></div>
-            <div class="form-field"><label>Container Port</label><input id="zipPort" type="number" min="1" value="8080" /></div>
+            <div class="form-field"><label>Container Port (Optional)</label><input id="zipPort" type="number" min="1" placeholder="Auto-detect from Dockerfile EXPOSE" /></div>
             <div class="form-field">
               <label>Dependency Type</label>
               <select id="zipDepType">
@@ -147,11 +147,6 @@
             </div>
             <div class="form-field" id="zipSqlDbWrap"><label>SQL Database (required for sql/both)</label><input id="zipSqlDb" value="AppDb" /></div>
             <div class="form-field" id="zipSqlPassWrap"><label>SQL Password (required for sql/both)</label><input id="zipSqlPass" value="StrongPass_123!" /></div>
-          </div>
-          <div class="form-field form-field-wide">
-            <label>Multi-App JSON (optional)</label>
-            <textarea id="zipAppsJson" rows="8" placeholder='[\n  {\n    "app_name": "backend",\n    "project": "backend",\n    "container_port": 8000,\n    "context_sub_path": "backend"\n  },\n  {\n    "app_name": "ui",\n    "project": "ui",\n    "container_port": 8501,\n    "context_sub_path": "ui"\n  }\n]'></textarea>
-            <div class="form-hint">Doluysa tekli App Name ve Container Port yerine bu `apps[]` listesi kullanilir.</div>
           </div>
           <details class="advanced-box">
             <summary>Advanced (optional overrides)</summary>

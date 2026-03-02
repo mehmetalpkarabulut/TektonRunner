@@ -565,21 +565,6 @@ input, select {
   color: var(--muted);
 }
 
-.form-field textarea {
-  min-height: 180px;
-  resize: vertical;
-}
-
-.form-field-wide {
-  margin-top: 14px;
-}
-
-.form-hint {
-  margin-top: 8px;
-  font-size: 12px;
-  color: var(--muted);
-}
-
 .advanced-box {
   margin-top: 10px;
   border: 1px dashed var(--line);

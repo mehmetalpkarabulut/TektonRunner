@@ -461,12 +461,12 @@ func resolveAppTargets(in Input) ([]AppTarget, error) {
 			tag = strings.TrimSpace(baseTag)
 		}
 		port := app.ContainerPort
-		if port == 0 {
-			return nil, fmt.Errorf("apps[%d].container_port is required for multi-app deploys", i)
-		}
 		ctx, err := normalizeContextSubDir(app.ContextSubDir)
 		if err != nil {
 			return nil, fmt.Errorf("apps[%d]: %w", i, err)
+		}
+		if port == 0 {
+			port = basePort
 		}
 		targets = append(targets, AppTarget{
 			AppName:       name,
@@ -1663,10 +1663,6 @@ func autoDiscoverZipApps(in *Input) error {
 		return nil
 	}
 
-	basePort := in.Deploy.ContainerPort
-	if basePort == 0 {
-		basePort = 8080
-	}
 	seen := map[string]int{}
 	apps := make([]AppSpec, 0, len(contexts))
 	for _, ctx := range contexts {
@@ -1684,7 +1680,7 @@ func autoDiscoverZipApps(in *Input) error {
 			AppName:       name,
 			Project:       name,
 			Tag:           strings.TrimSpace(in.Image.Tag),
-			ContainerPort: basePort,
+			ContainerPort: 0,
 			ContextSubDir: ctx,
 		})
 	}

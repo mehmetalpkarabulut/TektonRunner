@@ -1152,43 +1152,32 @@ function buildZipPayload() {
   const appName = document.getElementById("zipAppName").value.trim();
   const workspace = document.getElementById("zipWorkspace").value.trim();
   const zipUrl = document.getElementById("zipUrl").value.trim();
-  const appsRaw = document.getElementById("zipAppsJson").value.trim();
   const project = document.getElementById("zipImageProject").value.trim();
   const tag = document.getElementById("zipImageTag").value.trim();
   const registry = document.getElementById("zipRegistry").value.trim();
-  const port = parseInt(document.getElementById("zipPort").value, 10) || 8080;
-  let apps = null;
+  const portValue = document.getElementById("zipPort").value.trim();
+  const port = portValue ? parseInt(portValue, 10) : 0;
 
+  if (!appName) {
+    throw new Error("App Name zorunlu.");
+  }
   if (!zipUrl) {
     throw new Error("Zip URL zorunlu.");
   }
-  if (appsRaw) {
-    try {
-      apps = JSON.parse(appsRaw);
-    } catch (err) {
-      throw new Error(`Multi-App JSON gecersiz: ${err.message || err}`);
-    }
-    if (!Array.isArray(apps) || apps.length === 0) {
-      throw new Error("Multi-App JSON bos olmayan bir dizi olmali.");
-    }
-  } else if (!appName) {
-    throw new Error("App Name zorunlu.");
-  }
 
   const payload = {
+    app_name: appName,
     workspace: workspace,
     source: { type: "zip", zip_url: zipUrl },
     image: {
       project: project || deriveImageProject(appName),
       tag: tag || "latest",
       registry: registry || "lenovo:8443"
-    }
+    },
+    deploy: {}
   };
-  if (apps) {
-    payload.apps = apps;
-  } else {
-    payload.app_name = appName;
-    payload.deploy = { container_port: port };
+  if (port > 0) {
+    payload.deploy.container_port = port;
   }
   const dep = buildDependencyPayload("zip");
   const depType = dep?.type || "none";
@@ -1235,8 +1224,7 @@ function fillZipForm(sample) {
   document.getElementById("zipImageProject").value = sample.image.project || "";
   document.getElementById("zipImageTag").value = sample.image.tag;
   document.getElementById("zipRegistry").value = sample.image.registry;
-  document.getElementById("zipPort").value = sample.deploy?.container_port || 8080;
-  document.getElementById("zipAppsJson").value = Array.isArray(sample.apps) ? JSON.stringify(sample.apps, null, 2) : "";
+  document.getElementById("zipPort").value = sample.deploy?.container_port || "";
   const depType = sample.dependency?.type || "none";
   document.getElementById("zipDepType").value = depType;
   document.getElementById("zipRedisImage").value = sample.dependency?.redis?.image || "lenovo:8443/library/redis:7-alpine";
@@ -1362,15 +1350,18 @@ const sampleGit = {
 };
 
 const sampleZip = {
-  workspace: "ws-python",
+  app_name: "demoapp",
+  workspace: "ws-demo",
   source: {
     type: "zip",
-    zip_url: "http://zip-server.tekton-pipelines.svc.cluster.local:8080/python-suite.zip"
+    zip_url: "http://zip-server.tekton-pipelines.svc.cluster.local:8080/app.zip"
   },
   image: {
+    project: "demoapp",
     tag: "latest",
     registry: "lenovo:8443"
   },
+  deploy: {},
   dependency: {
     type: "both",
     redis: {
@@ -1388,21 +1379,7 @@ const sampleZip = {
       password: "StrongPass_123!",
       connection_env: "ConnectionStrings__DefaultConnection"
     }
-  },
-  apps: [
-    {
-      app_name: "backend",
-      project: "backend",
-      container_port: 8000,
-      context_sub_path: "backend"
-    },
-    {
-      app_name: "ui",
-      project: "ui",
-      container_port: 8501,
-      context_sub_path: "ui"
-    }
-  ]
+  }
 };
 
 document.getElementById("sampleGit").onclick = () => showSampleModal("Git Sample JSON", sampleGit, fillGitForm);
