@@ -38,6 +38,9 @@ spec:
     - name: context-sub-path
       type: string
       default: ""
+    - name: base-image-map
+      type: string
+      default: "{}"
   workspaces:
     - name: source
     - name: git-credentials
@@ -182,6 +185,83 @@ spec:
           echo "Failed to create project. HTTP $code"
           exit 1
         fi
+    - name: rewrite-base-images
+      image: lenovo:8443/library/python:3.12-alpine
+      script: |
+        set -e
+        python - <<'PY'
+        import json
+        import os
+        import re
+
+        dockerfile = "/workspace/source/Dockerfile"
+        sub = os.environ.get("CONTEXT_SUB_PATH", "").lstrip("./")
+        if sub:
+            dockerfile = f"/workspace/source/{sub}/Dockerfile"
+        if os.path.exists("/workspace/source/.dockerfile-path"):
+            with open("/workspace/source/.dockerfile-path", "r", encoding="utf-8") as fh:
+                dockerfile = fh.read().strip()
+
+        raw_map = os.environ.get("BASE_IMAGE_MAP", "{}").strip() or "{}"
+        mapping = json.loads(raw_map)
+        if not mapping:
+            print("base image rewrite skipped: empty mapping")
+            raise SystemExit(0)
+        if not os.path.exists(dockerfile):
+            raise SystemExit(f"Dockerfile not found for rewrite: {dockerfile}")
+
+        arg_defaults = {}
+        from_re = re.compile(r'^(\s*FROM\s+)(.*)$', re.IGNORECASE)
+        var_re = re.compile(r'\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))')
+
+        def expand(token: str) -> str:
+            def repl(match):
+                name = match.group(1) or match.group(2)
+                return arg_defaults.get(name, match.group(0))
+            return var_re.sub(repl, token)
+
+        out = []
+        with open(dockerfile, "r", encoding="utf-8") as fh:
+            for line in fh:
+                stripped = line.strip()
+                upper = stripped.upper()
+                if upper.startswith("ARG "):
+                    body = stripped[4:].strip()
+                    if "=" in body:
+                        name, value = body.split("=", 1)
+                        arg_defaults[name.strip()] = value.strip()
+                    out.append(line)
+                    continue
+                match = from_re.match(line)
+                if not match:
+                    out.append(line)
+                    continue
+                prefix, rest = match.groups()
+                parts = rest.strip().split()
+                if not parts:
+                    out.append(line)
+                    continue
+                idx = 0
+                while idx < len(parts) and parts[idx].startswith("--"):
+                    idx += 1
+                if idx >= len(parts):
+                    out.append(line)
+                    continue
+                image = parts[idx]
+                resolved = expand(image)
+                if "$" not in resolved and resolved in mapping:
+                    parts[idx] = mapping[resolved]
+                    line = prefix + " ".join(parts) + ("\n" if not line.endswith("\n") else "")
+                out.append(line)
+
+        with open(dockerfile, "w", encoding="utf-8") as fh:
+            fh.writelines(out)
+        PY
+      env:
+        - name: BASE_IMAGE_MAP
+          value: $(params.base-image-map)
+        - name: CONTEXT_SUB_PATH
+          value: $(params.context-sub-path)
     - name: build
       image: lenovo:8443/library/kaniko-executor:debug
       script: |

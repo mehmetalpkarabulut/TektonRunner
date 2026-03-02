@@ -162,28 +162,30 @@ type AppTarget struct {
 	Tag           string
 	ContainerPort int
 	ContextSubDir string
+	BaseImageMap  string
 }
 
 type RenderContext struct {
-	Namespace   string
-	Task        string
-	SourceType  string
-	RepoURL     string
-	Revision    string
-	LocalPath   string
-	Project     string
-	Tag         string
-	Registry    string
-	ZipURL      string
-	ZipUsername string
-	ZipPassword string
-	GitSecret   string
-	PVCName     string
-	HasGit      bool
-	HasLocal    bool
-	HasZip      bool
-	AppName     string
-	ContextSub  string
+	Namespace    string
+	Task         string
+	SourceType   string
+	RepoURL      string
+	Revision     string
+	LocalPath    string
+	Project      string
+	Tag          string
+	Registry     string
+	ZipURL       string
+	ZipUsername  string
+	ZipPassword  string
+	GitSecret    string
+	PVCName      string
+	HasGit       bool
+	HasLocal     bool
+	HasZip       bool
+	AppName      string
+	ContextSub   string
+	BaseImageMap string
 }
 
 type ServerState struct {
@@ -1401,6 +1403,9 @@ func buildManifests(in *Input) ([]string, []AppTarget, error) {
 	if err != nil {
 		return nil, nil, err
 	}
+	if err := attachBaseImageMirrors(*in, targets); err != nil {
+		log.Printf("base image mirror skipped: %v", err)
+	}
 
 	manifests := make([]string, 0, 4)
 	if in.Source.Type == "git" && in.Source.GitUsername != "" && in.Source.GitToken != "" {
@@ -1713,6 +1718,364 @@ func detectPrimaryIPv4() string {
 		}
 	}
 	return ""
+}
+
+func attachBaseImageMirrors(in Input, targets []AppTarget) error {
+	if len(targets) == 0 {
+		return nil
+	}
+	srcDir, cleanup, err := prepareSourceForMirror(in)
+	if err != nil {
+		return err
+	}
+	if cleanup != nil {
+		defer cleanup()
+	}
+
+	cache := map[string]string{}
+	for i := range targets {
+		df := filepath.Join(srcDir, filepath.FromSlash(strings.TrimPrefix(targets[i].ContextSubDir, "./")), "Dockerfile")
+		if strings.TrimSpace(targets[i].ContextSubDir) == "" || targets[i].ContextSubDir == "." {
+			df = filepath.Join(srcDir, "Dockerfile")
+		}
+		mapping, err := buildDockerfileMirrorMap(df, in.Image.Registry, cache)
+		if err != nil {
+			log.Printf("base image mirror skipped for %s: %v", targets[i].AppName, err)
+			continue
+		}
+		if len(mapping) == 0 {
+			continue
+		}
+		b, err := json.Marshal(mapping)
+		if err != nil {
+			return fmt.Errorf("marshal base image map for %s: %v", targets[i].AppName, err)
+		}
+		targets[i].BaseImageMap = string(b)
+	}
+	return nil
+}
+
+func prepareSourceForMirror(in Input) (string, func(), error) {
+	switch in.Source.Type {
+	case "git":
+		dir, err := os.MkdirTemp("", "tekton-runner-git-*")
+		if err != nil {
+			return "", nil, err
+		}
+		cleanup := func() { _ = os.RemoveAll(dir) }
+		url := strings.TrimSpace(in.Source.RepoURL)
+		if url == "" {
+			cleanup()
+			return "", nil, fmt.Errorf("git repo_url is empty")
+		}
+		if in.Source.GitUsername != "" && in.Source.GitToken != "" && strings.HasPrefix(url, "https://") {
+			url = strings.Replace(url, "https://", "https://"+neturl.QueryEscape(in.Source.GitUsername)+":"+neturl.QueryEscape(in.Source.GitToken)+"@", 1)
+		}
+		ref := strings.TrimSpace(in.Source.Revision)
+		if ref == "" {
+			ref = "main"
+		}
+		ref = strings.TrimPrefix(ref, "refs/heads/")
+		cmd := exec.Command("git", "clone", "--depth", "1", "--branch", ref, url, dir)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			cleanup()
+			return "", nil, fmt.Errorf("git clone failed: %v: %s", err, strings.TrimSpace(string(out)))
+		}
+		return dir, cleanup, nil
+	case "zip":
+		dir, err := os.MkdirTemp("", "tekton-runner-zip-src-*")
+		if err != nil {
+			return "", nil, err
+		}
+		cleanup := func() { _ = os.RemoveAll(dir) }
+		req, err := http.NewRequest(http.MethodGet, in.Source.ZipURL, nil)
+		if err != nil {
+			cleanup()
+			return "", nil, err
+		}
+		if in.Source.ZipUsername != "" || in.Source.ZipPassword != "" {
+			req.SetBasicAuth(in.Source.ZipUsername, in.Source.ZipPassword)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			cleanup()
+			return "", nil, err
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			cleanup()
+			return "", nil, fmt.Errorf("zip fetch failed: %s", resp.Status)
+		}
+		tmpZip, err := os.CreateTemp("", "tekton-runner-src-*.zip")
+		if err != nil {
+			cleanup()
+			return "", nil, err
+		}
+		tmpZipPath := tmpZip.Name()
+		if _, err := io.Copy(tmpZip, resp.Body); err != nil {
+			tmpZip.Close()
+			_ = os.Remove(tmpZipPath)
+			cleanup()
+			return "", nil, err
+		}
+		if err := tmpZip.Close(); err != nil {
+			_ = os.Remove(tmpZipPath)
+			cleanup()
+			return "", nil, err
+		}
+		defer os.Remove(tmpZipPath)
+		zr, err := zip.OpenReader(tmpZipPath)
+		if err != nil {
+			cleanup()
+			return "", nil, err
+		}
+		defer zr.Close()
+		for _, f := range zr.File {
+			name := filepath.Clean(strings.ReplaceAll(f.Name, "\\", "/"))
+			if name == "." || strings.HasPrefix(name, "..") {
+				continue
+			}
+			dst := filepath.Join(dir, name)
+			if f.FileInfo().IsDir() {
+				if err := os.MkdirAll(dst, 0o755); err != nil {
+					cleanup()
+					return "", nil, err
+				}
+				continue
+			}
+			if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+				cleanup()
+				return "", nil, err
+			}
+			rc, err := f.Open()
+			if err != nil {
+				cleanup()
+				return "", nil, err
+			}
+			out, err := os.OpenFile(dst, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, f.Mode())
+			if err != nil {
+				rc.Close()
+				cleanup()
+				return "", nil, err
+			}
+			if _, err := io.Copy(out, rc); err != nil {
+				out.Close()
+				rc.Close()
+				cleanup()
+				return "", nil, err
+			}
+			out.Close()
+			rc.Close()
+		}
+		return dir, cleanup, nil
+	case "local":
+		p := strings.TrimSpace(in.Source.LocalPath)
+		candidates := []string{p}
+		if !filepath.IsAbs(p) {
+			candidates = append(candidates, filepath.Join("/home/beko", p))
+		}
+		for _, c := range candidates {
+			if c == "" {
+				continue
+			}
+			info, err := os.Stat(c)
+			if err == nil && info.IsDir() {
+				return c, nil, nil
+			}
+		}
+		return "", nil, fmt.Errorf("local_path is not accessible on runner host: %s", p)
+	default:
+		return "", nil, fmt.Errorf("unsupported source type for mirror: %s", in.Source.Type)
+	}
+}
+
+func buildDockerfileMirrorMap(dockerfilePath, harborRegistry string, cache map[string]string) (map[string]string, error) {
+	b, err := os.ReadFile(dockerfilePath)
+	if err != nil {
+		return nil, err
+	}
+	lines := strings.Split(string(b), "\n")
+	args := map[string]string{}
+	out := map[string]string{}
+	for _, raw := range lines {
+		trimmed := strings.TrimSpace(raw)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		upper := strings.ToUpper(trimmed)
+		if strings.HasPrefix(upper, "ARG ") {
+			body := strings.TrimSpace(trimmed[4:])
+			parts := strings.SplitN(body, "=", 2)
+			if len(parts) == 2 {
+				args[strings.TrimSpace(parts[0])] = strings.TrimSpace(parts[1])
+			}
+			continue
+		}
+		if !strings.HasPrefix(upper, "FROM ") {
+			continue
+		}
+		src := resolveDockerfileFromImage(trimmed, args)
+		if src == "" || src == "scratch" {
+			continue
+		}
+		if strings.HasPrefix(strings.ToLower(src), strings.ToLower(harborRegistry)+"/") {
+			continue
+		}
+		if mirrored, ok := cache[src]; ok {
+			out[src] = mirrored
+			continue
+		}
+		mirrored, err := mirrorImageToHarbor(src, harborRegistry)
+		if err != nil {
+			return nil, err
+		}
+		cache[src] = mirrored
+		out[src] = mirrored
+	}
+	return out, nil
+}
+
+func resolveDockerfileFromImage(line string, args map[string]string) string {
+	fields := strings.Fields(line)
+	if len(fields) < 2 || !strings.EqualFold(fields[0], "FROM") {
+		return ""
+	}
+	idx := 1
+	for idx < len(fields) && strings.HasPrefix(fields[idx], "--") {
+		idx++
+	}
+	if idx >= len(fields) {
+		return ""
+	}
+	image := fields[idx]
+	image = dockerfileExpandArgs(image, args)
+	if strings.Contains(image, "$") {
+		return ""
+	}
+	return image
+}
+
+func dockerfileExpandArgs(s string, args map[string]string) string {
+	re := regexp.MustCompile(`\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?`)
+	return re.ReplaceAllStringFunc(s, func(m string) string {
+		name := strings.TrimPrefix(m, "${")
+		name = strings.TrimPrefix(name, "$")
+		name = strings.TrimSuffix(name, "}")
+		if v, ok := args[name]; ok {
+			return v
+		}
+		return m
+	})
+}
+
+func mirrorImageToHarbor(src, harborRegistry string) (string, error) {
+	if err := ensureHarborProject("mirror-cache", harborRegistry); err != nil {
+		return "", err
+	}
+	registry, repo, tag := parseImageReference(src)
+	destRepo := fmt.Sprintf("mirror-cache/%s/%s", sanitizeRepoPart(registry), repo)
+	destCopy := fmt.Sprintf("%s/%s:%s", harborCopyRegistry(), destRepo, tag)
+	copyCmd := exec.Command(
+		"docker", "run", "--rm",
+		"quay.io/skopeo/stable:latest",
+		"copy",
+		"--dest-creds", "admin:Harbor12345",
+		"--dest-tls-verify=false",
+		"docker://"+src,
+		"docker://"+destCopy,
+	)
+	if out, err := copyCmd.CombinedOutput(); err != nil {
+		return "", fmt.Errorf("skopeo copy %s -> %s failed: %v: %s", src, destCopy, err, strings.TrimSpace(string(out)))
+	}
+	return fmt.Sprintf("%s/%s:%s", harborRegistry, destRepo, tag), nil
+}
+
+func ensureHarborProject(project, _ string) error {
+	body := fmt.Sprintf(`{"project_name":%q,"metadata":{"public":"true"}}`, project)
+	tmp, err := os.CreateTemp("", "harbor-project-*.json")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	if _, err := tmp.WriteString(body); err != nil {
+		tmp.Close()
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	defer os.Remove(tmpPath)
+
+	cmd := exec.Command(
+		"curl", "-sk",
+		"-u", "admin:Harbor12345",
+		"-H", "Content-Type: application/json",
+		"-o", "/tmp/harbor-project-create.out",
+		"-w", "%{http_code}",
+		"-d", "@"+tmpPath,
+		harborAPIBase()+"/api/v2.0/projects",
+	)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("harbor project create request failed: %v: %s", err, strings.TrimSpace(string(out)))
+	}
+	code := strings.TrimSpace(string(out))
+	if code == "201" || code == "409" {
+		return nil
+	}
+	respBody, _ := os.ReadFile("/tmp/harbor-project-create.out")
+	return fmt.Errorf("harbor project create failed: HTTP %s: %s", code, strings.TrimSpace(string(respBody)))
+}
+
+func harborAPIBase() string {
+	return "https://127.0.0.1:8443"
+}
+
+func harborCopyRegistry() string {
+	return "172.18.0.1:8443"
+}
+
+func parseImageReference(ref string) (string, string, string) {
+	in := strings.TrimSpace(ref)
+	if i := strings.Index(in, "@"); i >= 0 {
+		digest := in[i+1:]
+		in = in[:i]
+		tag := "sha256-" + strings.ReplaceAll(strings.TrimPrefix(digest, "sha256:"), ":", "-")
+		registry, repo, _ := parseImageReference(in)
+		return registry, repo, tag
+	}
+	tag := "latest"
+	lastSlash := strings.LastIndex(in, "/")
+	lastColon := strings.LastIndex(in, ":")
+	if lastColon > lastSlash {
+		tag = in[lastColon+1:]
+		in = in[:lastColon]
+	}
+	parts := strings.Split(in, "/")
+	registry := "docker.io"
+	repoParts := parts
+	if len(parts) > 1 && (strings.Contains(parts[0], ".") || strings.Contains(parts[0], ":") || parts[0] == "localhost") {
+		registry = parts[0]
+		repoParts = parts[1:]
+	}
+	if registry == "docker.io" && len(repoParts) == 1 {
+		repoParts = append([]string{"library"}, repoParts...)
+	}
+	return registry, strings.Join(repoParts, "/"), tag
+}
+
+func sanitizeRepoPart(s string) string {
+	s = strings.ToLower(strings.TrimSpace(s))
+	re := regexp.MustCompile(`[^a-z0-9._-]+`)
+	s = re.ReplaceAllString(s, "-")
+	s = strings.Trim(s, "-")
+	if s == "" {
+		return "unknown"
+	}
+	return s
 }
 
 func withResolvedHost(rawURL, host string) string {
@@ -4481,26 +4844,31 @@ spec:
 }
 
 func renderTaskRun(in Input, target AppTarget) string {
+	baseImageMap := `"{}"`
+	if strings.TrimSpace(target.BaseImageMap) != "" {
+		baseImageMap = yamlQuote(target.BaseImageMap)
+	}
 	ctx := RenderContext{
-		Namespace:   in.Namespace,
-		Task:        in.Task,
-		SourceType:  in.Source.Type,
-		RepoURL:     in.Source.RepoURL,
-		Revision:    in.Source.Revision,
-		LocalPath:   in.Source.LocalPath,
-		Project:     target.Project,
-		Tag:         target.Tag,
-		Registry:    in.Image.Registry,
-		ZipURL:      in.Source.ZipURL,
-		ZipUsername: in.Source.ZipUsername,
-		ZipPassword: in.Source.ZipPassword,
-		GitSecret:   in.Source.GitSecret,
-		PVCName:     in.Source.PVCName,
-		HasGit:      in.Source.Type == "git" && in.Source.GitUsername != "" && in.Source.GitToken != "",
-		HasLocal:    in.Source.Type == "local",
-		HasZip:      in.Source.Type == "zip",
-		AppName:     target.AppName,
-		ContextSub:  target.ContextSubDir,
+		Namespace:    in.Namespace,
+		Task:         in.Task,
+		SourceType:   in.Source.Type,
+		RepoURL:      in.Source.RepoURL,
+		Revision:     in.Source.Revision,
+		LocalPath:    in.Source.LocalPath,
+		Project:      target.Project,
+		Tag:          target.Tag,
+		Registry:     in.Image.Registry,
+		ZipURL:       in.Source.ZipURL,
+		ZipUsername:  in.Source.ZipUsername,
+		ZipPassword:  in.Source.ZipPassword,
+		GitSecret:    in.Source.GitSecret,
+		PVCName:      in.Source.PVCName,
+		HasGit:       in.Source.Type == "git" && in.Source.GitUsername != "" && in.Source.GitToken != "",
+		HasLocal:     in.Source.Type == "local",
+		HasZip:       in.Source.Type == "zip",
+		AppName:      target.AppName,
+		ContextSub:   target.ContextSubDir,
+		BaseImageMap: baseImageMap,
 	}
 
 	tpl := `apiVersion: tekton.dev/v1
@@ -4541,6 +4909,8 @@ spec:
       value: {{.Registry}}
     - name: tag
       value: {{.Tag}}
+    - name: base-image-map
+      value: {{.BaseImageMap}}
 {{- if .ContextSub }}
     - name: context-sub-path
       value: {{.ContextSub}}
