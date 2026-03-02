@@ -68,6 +68,8 @@ cat request.json | ./tekton-runner
 
 - `source.type=git` için `repo_url` zorunlu.
 - Git kullanıcı/şifre verilirse secret otomatik oluşturulur.
+- Harbor project adı workspace'ten üretilir. `ws-myapp` workspace'i Harbor'da `myapp` projesine yazar.
+- `image.project` ve `apps[].project` Harbor project adı degil, proje icindeki repo adidir. Bos ise app adi kullanilir.
 - NFS/SMB bilgisi verilirse PV+PVC (ve SMB secret) otomatik oluşturulur.
 - `file_storage.enabled=true` verilirse uygulama pod'una ortak RWX storage mount edilir.
 - `file_storage.sub_path` bos birakilirsa otomatik olarak `shared/<workspace>/<app>` olusturulur.
@@ -198,6 +200,8 @@ Notlar:
 - `apps[]` verildiginde `app_name` ve `image.project` zorunlu degildir.
 - `apps[].container_port` opsiyoneldir. Verilmezse runner once Dockerfile `EXPOSE` bilgisini kullanir, bulamazsa varsayilan porta duser.
 - `apps[].project` bossa `apps[].app_name` kullanilir.
+- Harbor project adi `workspace` alanindan uretilir. Ornek: `ws-suite` -> Harbor project `suite`.
+- Bu durumda ornekteki image yolları `lenovo:8443/suite/memo-api:latest` ve `lenovo:8443/suite/memo-ui:latest` olur.
 - `apps[].tag` bossa `image.tag` (yoksa `latest`) kullanilir.
 - `context_sub_path` verilirse build context o alt klasor olur.
 - `container_port` verilirse uygulamanin gercek dinledigi port olmalidir. Ornek: FastAPI/Uvicorn cogu zaman `8000`, Streamlit `8501`.

@@ -274,6 +274,7 @@ type RenderContext struct {
 	RepoURL      string
 	Revision     string
 	Project      string
+	Repo         string
 	Tag          string
 	Registry     string
 	ZipURL       string
@@ -285,6 +286,16 @@ type RenderContext struct {
 	AppName      string
 	ContextSub   string
 	BaseImageMap string
+}
+
+func harborProjectName(workspace string) string {
+	name := sanitizeName(strings.TrimSpace(workspace))
+	name = strings.TrimPrefix(name, "ws-")
+	name = strings.Trim(name, "-")
+	if name == "" {
+		return "default"
+	}
+	return name
 }
 
 type ServerState struct {
@@ -2405,7 +2416,8 @@ func handleZipDeploy(in Input, targets []AppTarget, taskRuns map[string]string, 
 		"type": in.Dependency.Type,
 	})
 	if in.Migration.Enabled {
-		leadImage := fmt.Sprintf("%s/%s/%s:%s", in.Image.Registry, strings.ToLower(targets[0].Project), strings.ToLower(targets[0].Project), targets[0].Tag)
+		projectName := harborProjectName(workspace)
+		leadImage := fmt.Sprintf("%s/%s/%s:%s", in.Image.Registry, projectName, strings.ToLower(targets[0].Project), targets[0].Tag)
 		emitRunEvent(runID, workspace, leadApp, "migration", "running", "Running migration job", nil)
 		if err := runMigrationJob(kcfgPath, clusterName, leadApp, in.Migration, envRefs, leadImage); err != nil {
 			emitRunEvent(runID, workspace, leadApp, "migration", "failed", err.Error(), nil)
@@ -2423,7 +2435,8 @@ func handleZipDeploy(in Input, targets []AppTarget, taskRuns map[string]string, 
 	}
 
 	for _, t := range targets {
-		image := fmt.Sprintf("%s/%s/%s:%s", in.Image.Registry, strings.ToLower(t.Project), strings.ToLower(t.Project), t.Tag)
+		projectName := harborProjectName(workspace)
+		image := fmt.Sprintf("%s/%s/%s:%s", in.Image.Registry, projectName, strings.ToLower(t.Project), t.Tag)
 		emitRunEvent(runID, workspace, t.AppName, "deploy", "running", "Applying deployment and service", map[string]string{
 			"image": image,
 		})
@@ -5476,7 +5489,8 @@ func renderTaskRun(in Input, target AppTarget) string {
 		SourceType:   in.Source.Type,
 		RepoURL:      in.Source.RepoURL,
 		Revision:     in.Source.Revision,
-		Project:      target.Project,
+		Project:      harborProjectName(in.Workspace),
+		Repo:         target.Project,
 		Tag:          target.Tag,
 		Registry:     in.Image.Registry,
 		ZipURL:       in.Source.ZipURL,
@@ -5524,6 +5538,8 @@ spec:
 {{- end }}
     - name: project
       value: {{.Project}}
+    - name: repo
+      value: {{.Repo}}
     - name: registry
       value: {{.Registry}}
     - name: tag

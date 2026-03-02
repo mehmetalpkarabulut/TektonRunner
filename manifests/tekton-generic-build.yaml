@@ -16,7 +16,10 @@ spec:
       default: main
     - name: project
       type: string
-      description: "Harbor project name (lowercase will be used)"
+      description: "Harbor project name (workspace-derived, lowercase will be used)"
+    - name: repo
+      type: string
+      description: "Harbor repository name inside the project"
     - name: registry
       type: string
       default: lenovo:8443
@@ -290,7 +293,13 @@ spec:
         fi
         proj="$(params.project)"
         proj="$(printf '%s' "$proj" | tr '[:upper:]' '[:lower:]')"
-        dest="$(params.registry)/${proj}/${proj}:$(params.tag)"
+        repo="$(params.repo)"
+        repo="$(printf '%s' "$repo" | tr '[:upper:]' '[:lower:]')"
+        if [ -z "$repo" ]; then
+          echo "repo param is required"
+          exit 1
+        fi
+        dest="$(params.registry)/${proj}/${repo}:$(params.tag)"
         /kaniko/executor \
           --dockerfile="$dockerfile" \
           --context="$context" \
