@@ -252,7 +252,7 @@ spec:
                 resolved = expand(image)
                 if "$" not in resolved and resolved in mapping:
                     parts[idx] = mapping[resolved]
-                    line = prefix + " ".join(parts) + ("\n" if not line.endswith("\n") else "")
+                    line = prefix + " ".join(parts) + ("\n" if line.endswith("\n") else "")
                 out.append(line)
 
         with open(dockerfile, "w", encoding="utf-8") as fh:

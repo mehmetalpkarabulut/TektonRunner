@@ -1000,6 +1000,8 @@ function buildGitPayload() {
     },
     deploy: { container_port: port }
   };
+  const storage = buildSharedStoragePayload("git");
+  if (storage) payload.file_storage = storage;
 
   if (depType !== "none") {
     payload.dependency = { type: depType };
@@ -1068,6 +1070,26 @@ function updateGitDependencyVisibility() {
     if (migrationArgsWrap) migrationArgsWrap.style.display = "none";
     addActivity({ method: "UI", endpoint: "migration", status: 400, message: "Migration sadece sql/both dependency ile kullanilabilir." });
   }
+}
+
+function buildSharedStoragePayload(prefix) {
+  const enabled = document.getElementById(`${prefix}StorageEnabled`)?.value === "true";
+  if (!enabled) {
+    return null;
+  }
+  return {
+    enabled: true,
+    pvc_name: document.getElementById(`${prefix}StoragePvc`)?.value.trim() || "shared-file-pvc",
+    mount_path: document.getElementById(`${prefix}StorageMount`)?.value.trim() || "/app/storage"
+  };
+}
+
+function updateStorageVisibility(prefix) {
+  const enabled = document.getElementById(`${prefix}StorageEnabled`)?.value === "true";
+  const pvcWrap = document.getElementById(`${prefix}StoragePvcWrap`);
+  const mountWrap = document.getElementById(`${prefix}StorageMountWrap`);
+  if (pvcWrap) pvcWrap.style.display = enabled ? "" : "none";
+  if (mountWrap) mountWrap.style.display = enabled ? "" : "none";
 }
 
 function buildDependencyPayload(prefix) {
@@ -1176,6 +1198,8 @@ function buildZipPayload() {
     },
     deploy: {}
   };
+  const storage = buildSharedStoragePayload("zip");
+  if (storage) payload.file_storage = storage;
   if (port > 0) {
     payload.deploy.container_port = port;
   }
@@ -1214,7 +1238,11 @@ function fillGitForm(sample) {
   document.getElementById("gitMigrationCmd").value = Array.isArray(sample.migration?.command) ? sample.migration.command.join(",") : "";
   document.getElementById("gitMigrationArgs").value = Array.isArray(sample.migration?.args) ? sample.migration.args.join(",") : "";
   document.getElementById("gitMigrationEnv").value = sample.migration?.env_name || "ConnectionStrings__DefaultConnection";
+  document.getElementById("gitStorageEnabled").value = sample.file_storage?.enabled ? "true" : "false";
+  document.getElementById("gitStoragePvc").value = sample.file_storage?.pvc_name || "shared-file-pvc";
+  document.getElementById("gitStorageMount").value = sample.file_storage?.mount_path || "/app/storage";
   updateGitDependencyVisibility();
+  updateStorageVisibility("git");
 }
 
 function fillZipForm(sample) {
@@ -1243,7 +1271,11 @@ function fillZipForm(sample) {
   document.getElementById("zipMigrationCmd").value = Array.isArray(sample.migration?.command) ? sample.migration.command.join(",") : "";
   document.getElementById("zipMigrationArgs").value = Array.isArray(sample.migration?.args) ? sample.migration.args.join(",") : "";
   document.getElementById("zipMigrationEnv").value = sample.migration?.env_name || "ConnectionStrings__DefaultConnection";
+  document.getElementById("zipStorageEnabled").value = sample.file_storage?.enabled ? "true" : "false";
+  document.getElementById("zipStoragePvc").value = sample.file_storage?.pvc_name || "shared-file-pvc";
+  document.getElementById("zipStorageMount").value = sample.file_storage?.mount_path || "/app/storage";
   updateDependencyVisibility("zip");
+  updateStorageVisibility("zip");
 }
 
 function closeSampleModal() {
@@ -1346,6 +1378,11 @@ const sampleGit = {
     command: [],
     args: [],
     env_name: "ConnectionStrings__DefaultConnection"
+  },
+  file_storage: {
+    enabled: true,
+    pvc_name: "shared-file-pvc",
+    mount_path: "/app/storage"
   }
 };
 
@@ -1379,6 +1416,11 @@ const sampleZip = {
       password: "StrongPass_123!",
       connection_env: "ConnectionStrings__DefaultConnection"
     }
+  },
+  file_storage: {
+    enabled: true,
+    pvc_name: "shared-file-pvc",
+    mount_path: "/app/storage"
   }
 };
 
@@ -1459,10 +1501,14 @@ document.getElementById("e2eFetchBtn").onclick = async () => {
 
 document.getElementById("gitDepType").onchange = updateGitDependencyVisibility;
 document.getElementById("gitMigrationEnabled").onchange = updateGitDependencyVisibility;
+document.getElementById("gitStorageEnabled").onchange = () => updateStorageVisibility("git");
 document.getElementById("zipDepType").onchange = () => updateDependencyVisibility("zip");
 document.getElementById("zipMigrationEnabled").onchange = () => updateDependencyVisibility("zip");
+document.getElementById("zipStorageEnabled").onchange = () => updateStorageVisibility("zip");
 updateGitDependencyVisibility();
 updateDependencyVisibility("zip");
+updateStorageVisibility("git");
+updateStorageVisibility("zip");
 
 healthCheck();
 loadHostInfo();

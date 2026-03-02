@@ -80,6 +80,13 @@
             <div class="form-field"><label>Revision</label><input id="gitRevision" placeholder="main" value="main" /></div>
             <div class="form-field"><label>Container Port</label><input id="gitPort" type="number" min="1" value="3000" /></div>
             <div class="form-field">
+              <label>Shared Storage</label>
+              <select id="gitStorageEnabled">
+                <option value="false">Disabled</option>
+                <option value="true">Enabled</option>
+              </select>
+            </div>
+            <div class="form-field">
               <label>Dependency Type</label>
               <select id="gitDepType">
                 <option value="none">none</option>
@@ -103,6 +110,8 @@
               <div class="form-field"><label>Redis Service</label><input id="gitRedisService" value="redis" /></div>
               <div class="form-field"><label>Redis Port</label><input id="gitRedisPort" type="number" min="1" value="6379" /></div>
               <div class="form-field"><label>Redis Env Key</label><input id="gitRedisEnv" value="ConnectionStrings__Redis" /></div>
+              <div class="form-field" id="gitStoragePvcWrap"><label>Storage PVC Name</label><input id="gitStoragePvc" value="shared-file-pvc" /></div>
+              <div class="form-field" id="gitStorageMountWrap"><label>Storage Mount Path</label><input id="gitStorageMount" value="/app/storage" /></div>
               <div class="form-field"><label>SQL Image</label><input id="gitSqlImage" value="lenovo:8443/library/postgres:16-alpine" /></div>
               <div class="form-field"><label>SQL Service</label><input id="gitSqlService" value="postgres" /></div>
               <div class="form-field"><label>SQL Port</label><input id="gitSqlPort" type="number" min="1" value="5432" /></div>
@@ -137,6 +146,13 @@
             <div class="form-field"><label>Zip URL</label><input id="zipUrl" placeholder="http://.../app.zip" /></div>
             <div class="form-field"><label>Container Port (Optional)</label><input id="zipPort" type="number" min="1" placeholder="Auto-detect from Dockerfile EXPOSE" /></div>
             <div class="form-field">
+              <label>Shared Storage</label>
+              <select id="zipStorageEnabled">
+                <option value="false">Disabled</option>
+                <option value="true">Enabled</option>
+              </select>
+            </div>
+            <div class="form-field">
               <label>Dependency Type</label>
               <select id="zipDepType">
                 <option value="none">none</option>
@@ -154,6 +170,8 @@
               <div class="form-field"><label>Image Project</label><input id="zipImageProject" placeholder="app_name kullanilir" /></div>
               <div class="form-field"><label>Image Tag</label><input id="zipImageTag" value="latest" /></div>
               <div class="form-field"><label>Registry</label><input id="zipRegistry" value="lenovo:8443" /></div>
+              <div class="form-field" id="zipStoragePvcWrap"><label>Storage PVC Name</label><input id="zipStoragePvc" value="shared-file-pvc" /></div>
+              <div class="form-field" id="zipStorageMountWrap"><label>Storage Mount Path</label><input id="zipStorageMount" value="/app/storage" /></div>
               <div class="form-field"><label>Redis Image</label><input id="zipRedisImage" value="lenovo:8443/library/redis:7-alpine" /></div>
               <div class="form-field"><label>Redis Service</label><input id="zipRedisService" value="redis" /></div>
               <div class="form-field"><label>Redis Port</label><input id="zipRedisPort" type="number" min="1" value="6379" /></div>
