@@ -10,7 +10,7 @@
       href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap"
       rel="stylesheet"
     />
-    <link rel="stylesheet" href="/ui/styles.css?v=20260302-6" />
+    <link rel="stylesheet" href="/ui/styles.css?v=20260302-7" />
   </head>
   <body>
     <div class="orb orb-a"></div>
@@ -148,6 +148,11 @@
             <div class="form-field" id="zipSqlDbWrap"><label>SQL Database (required for sql/both)</label><input id="zipSqlDb" value="AppDb" /></div>
             <div class="form-field" id="zipSqlPassWrap"><label>SQL Password (required for sql/both)</label><input id="zipSqlPass" value="StrongPass_123!" /></div>
           </div>
+          <div class="form-field form-field-wide">
+            <label>Multi-App JSON (optional)</label>
+            <textarea id="zipAppsJson" rows="8" placeholder='[\n  {\n    "app_name": "backend",\n    "project": "backend",\n    "container_port": 8000,\n    "context_sub_path": "backend"\n  },\n  {\n    "app_name": "ui",\n    "project": "ui",\n    "container_port": 8501,\n    "context_sub_path": "ui"\n  }\n]'></textarea>
+            <div class="form-hint">Doluysa tekli App Name ve Container Port yerine bu `apps[]` listesi kullanilir.</div>
+          </div>
           <details class="advanced-box">
             <summary>Advanced (optional overrides)</summary>
             <div class="form-grid advanced-grid">
@@ -234,6 +239,6 @@
       </main>
     </div>
 
-    <script src="/ui/app.js?v=20260302-6"></script>
+    <script src="/ui/app.js?v=20260302-7"></script>
   </body>
 </html>
