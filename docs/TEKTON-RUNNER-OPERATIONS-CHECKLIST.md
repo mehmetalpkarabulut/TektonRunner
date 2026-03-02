@@ -33,12 +33,12 @@ Beklenen:
 ## 2.1) Quick Actions Kontrolu
 
 UI uzerinde:
-- `Git Sample / ZIP Sample / Local Sample` tiklandiginda popup acilmali.
+- `Git Sample / ZIP Sample` tiklandiginda popup acilmali.
 - Popup icinde JSON gorunmeli.
 - `Copy JSON` ve `Fill Form` butonlari calismali.
 - Git sample JSON icinde `source.git_username` ve `source.git_token` alanlari bulunmali.
-- ZIP ve Local formlarinda `Dependency Type` alani gorunmeli (`none|redis|sql|both`).
-- ZIP/Local icin `sql` veya `both` seciminde `SQL Database` ve `SQL Password` zorunlu olmali.
+- ZIP formunda `Dependency Type` alani gorunmeli (`none|redis|sql|both`).
+- ZIP icin `sql` veya `both` seciminde `SQL Database` ve `SQL Password` zorunlu olmali.
 
 ## 3) Workspace Pod Durumu
 
@@ -51,6 +51,11 @@ sudo KUBECONFIG=/home/beko/kubeconfigs/ws-<workspace>.yaml kubectl get svc -n ws
 Beklenen:
 - Podlar `Running`
 - Servis olusmus olmali
+
+Multi-app notu:
+- `backend` ve `ui` gibi farkli uygulamalar varsa `container_port` her app icin gercek dinleme portu olmalidir.
+- Ornek: FastAPI/Uvicorn `8000`, Streamlit `8501`.
+- Yeni runner surumunde loglardan port uyuşmazligi yakalanir ve deploy erken `failed` olur.
 
 ## 4) ImagePullBackOff Arizasi (lenovo no such host)
 
@@ -103,6 +108,10 @@ curl -sS --max-time 10 "http://127.0.0.1:8088/workspace/metrics?workspace=ws-<wo
 sudo journalctl -u tekton-runner.service -n 120 --no-pager
 sudo journalctl -u tekton-runner.service -f
 ```
+
+Port mismatch arizasi icin:
+- `runtime port mismatch for <app>: declared container_port=<x> but logs indicate <y>`
+- Bu hata gorulurse payload icindeki `apps[].container_port` degeri duzeltilmelidir.
 
 ## 7) Kod/Servis Guncelleme Akisi
 
@@ -212,4 +221,4 @@ Bugun eklenen operasyonel degisiklikler:
 - SQL migration job kontrolu
 - SQL external map/DBeaver hata cozum adimlari
 - SQL default memory/resource limitleri
-- ZIP/Local Build formlarina da dependency secimi eklendi
+- ZIP Build formuna dependency secimi eklendi

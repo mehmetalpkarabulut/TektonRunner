@@ -7,7 +7,7 @@ spec:
   params:
     - name: source-type
       type: string
-      description: "git, local, or zip"
+      description: "git or zip"
     - name: repo-url
       type: string
       default: ""
@@ -23,9 +23,6 @@ spec:
     - name: tag
       type: string
       default: latest
-    - name: local-path
-      type: string
-      default: ""
     - name: zip-url
       type: string
       default: ""
@@ -44,8 +41,6 @@ spec:
   workspaces:
     - name: source
     - name: git-credentials
-      optional: true
-    - name: local-source
       optional: true
   steps:
     - name: prepare-git
@@ -77,24 +72,6 @@ spec:
         ref="$(params.revision)"
         ref="${ref#refs/heads/}"
         git clone --depth 1 --branch "$ref" "$authed_url" /workspace/source
-    - name: prepare-local
-      image: lenovo:8443/library/alpine-git:2.45.2
-      script: |
-        set -e
-        if [ "$(params.source-type)" != "local" ]; then
-          exit 0
-        fi
-        rm -rf /workspace/source/*
-        if [ -z "$(params.local-path)" ]; then
-          echo "local-path param is required for local"
-          exit 1
-        fi
-        src="/workspace/local-source/$(params.local-path)"
-        if [ ! -d "$src" ]; then
-          echo "local path not found: $src"
-          exit 1
-        fi
-        cp -a "$src/." /workspace/source/
     - name: prepare-zip
       image: lenovo:8443/library/python:3.12-alpine
       script: |
@@ -106,21 +83,37 @@ spec:
           echo "zip-url param is required for zip"
           exit 1
         fi
+        echo "[prepare-zip] source=$(params.zip-url)"
+        echo "[prepare-zip] downloading zip archive"
         rm -rf /workspace/source/*
         python - <<'PY'
-        import os, urllib.request, zipfile, base64
+        import base64
+        import os
+        import socket
+        import sys
+        import urllib.request
+        import zipfile
 
         url = os.environ.get("ZIP_URL")
         user = os.environ.get("ZIP_USER")
         pw = os.environ.get("ZIP_PASS")
+        timeout = int(os.environ.get("ZIP_TIMEOUT", "20"))
 
         req = urllib.request.Request(url)
         if user and pw:
             token = base64.b64encode(f"{user}:{pw}".encode()).decode()
             req.add_header("Authorization", f"Basic {token}")
 
-        with urllib.request.urlopen(req) as r:
-            data = r.read()
+        try:
+            print(f"[prepare-zip] opening {url} timeout={timeout}s", flush=True)
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                data = r.read()
+            print(f"[prepare-zip] downloaded {len(data)} bytes", flush=True)
+        except Exception as exc:
+            print(f"[prepare-zip] download failed: {exc}", file=sys.stderr, flush=True)
+            if isinstance(exc, TimeoutError) or isinstance(exc, socket.timeout):
+                print("[prepare-zip] request timed out while fetching zip", file=sys.stderr, flush=True)
+            raise
 
         zip_path = "/tmp/src.zip"
         with open(zip_path, "wb") as f:
@@ -129,6 +122,7 @@ spec:
         dst = "/workspace/source"
         with zipfile.ZipFile(zip_path, "r") as z:
             z.extractall(dst)
+        print(f"[prepare-zip] extracted zip into {dst}", flush=True)
         PY
         sub="$(params.context-sub-path)"
         sub="${sub#./}"
@@ -163,6 +157,8 @@ spec:
         fi
         echo "$df" > /workspace/source/.dockerfile-path
         echo "$ctx" > /workspace/source/.context-path
+        echo "[prepare-zip] dockerfile=$df"
+        echo "[prepare-zip] context=$ctx"
       env:
         - name: ZIP_URL
           value: $(params.zip-url)
@@ -170,6 +166,8 @@ spec:
           value: $(params.zip-username)
         - name: ZIP_PASS
           value: $(params.zip-password)
+        - name: ZIP_TIMEOUT
+          value: "20"
     - name: create-project
       image: lenovo:8443/library/curl:8.12.1
       script: |

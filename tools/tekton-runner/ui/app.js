@@ -17,6 +17,7 @@ const e2eIncludeTaskrunEl = document.getElementById("e2eIncludeTaskrun");
 const e2eIncludeContainersEl = document.getElementById("e2eIncludeContainers");
 const e2eStatusEl = document.getElementById("e2eStatus");
 const e2eLogEl = document.getElementById("e2eLog");
+const e2eSectionEl = document.getElementById("e2eSection");
 
 let currentWorkspace = null;
 let currentApp = null;
@@ -108,8 +109,6 @@ function setRunContext(name, namespace) {
   runState = { name: name || "", namespace: namespace || "", status: "", message: "" };
   if (runTaskNameEl) runTaskNameEl.value = runState.name;
   if (runTaskNsEl) runTaskNsEl.value = runState.namespace || "tekton-pipelines";
-  startRunPoll();
-  startRunStream();
 }
 
 function stopRunPoll() {
@@ -217,10 +216,10 @@ async function fetchE2ELogs() {
     const text = await res.text();
     if (res.ok) {
       e2eStatusEl.textContent = "OK";
-      e2eLogEl.textContent = text || "(empty)";
+      renderPrettyLog(e2eLogEl, text || "(empty)");
     } else {
       e2eStatusEl.textContent = `Error (${res.status})`;
-      e2eLogEl.textContent = text || "request failed";
+      renderPrettyLog(e2eLogEl, text || "request failed");
     }
   }
   addActivity({
@@ -252,6 +251,32 @@ function escapeHtml(str) {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
+}
+
+function renderPrettyLog(el, text) {
+  if (!el) return;
+  const lines = String(text || "").split("\n");
+  const rendered = lines.map((line) => {
+    const safe = escapeHtml(line);
+    const trimmed = line.trim();
+    let cls = "log-line";
+    if (/^=== /.test(trimmed)) {
+      cls = "log-line section";
+    } else if (/^--- /.test(trimmed)) {
+      cls = "log-line subhead";
+    } else if (/\[FAIL\]|(^|\s)ERROR:|(^|\s)failed\b|exception|panic/i.test(trimmed)) {
+      cls = "log-line error";
+    } else if (/\[OK\]|\bsucceeded\b|\bcompleted\b/i.test(trimmed)) {
+      cls = "log-line ok";
+    } else if (/\[RUN\]|\brunning\b|\bsubmitted\b|\baccepted\b/i.test(trimmed)) {
+      cls = "log-line step";
+    } else if (/^\s+- /.test(line)) {
+      cls = "log-line meta";
+    }
+    return `<span class="${cls}">${safe}</span>`;
+  }).join("\n");
+  el.innerHTML = rendered;
+  el.scrollTop = el.scrollHeight;
 }
 
 function renderLogBuffer() {
@@ -930,6 +955,15 @@ function renderWorkspaceDetail() {
   }
 }
 
+function deriveImageProject(appName) {
+  const normalized = String(appName || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return normalized || "app";
+}
+
 function buildGitPayload() {
   const appName = document.getElementById("gitAppName").value.trim();
   const workspace = document.getElementById("gitWorkspace").value.trim();
@@ -944,6 +978,13 @@ function buildGitPayload() {
   const depType = document.getElementById("gitDepType").value;
   const migrationEnabled = document.getElementById("gitMigrationEnabled").value === "true";
 
+  if (!appName) {
+    throw new Error("App Name zorunlu.");
+  }
+  if (!repoUrl) {
+    throw new Error("Repo URL zorunlu.");
+  }
+
   const source = { type: "git", repo_url: repoUrl, revision: revision || "main" };
   if (gitUser) source.git_username = gitUser;
   if (gitToken) source.git_token = gitToken;
@@ -953,7 +994,7 @@ function buildGitPayload() {
     workspace: workspace,
     source,
     image: {
-      project: project || appName,
+      project: project || deriveImageProject(appName),
       tag: tag || "latest",
       registry: registry || "lenovo:8443"
     },
@@ -1116,12 +1157,19 @@ function buildZipPayload() {
   const registry = document.getElementById("zipRegistry").value.trim();
   const port = parseInt(document.getElementById("zipPort").value, 10) || 8080;
 
+  if (!appName) {
+    throw new Error("App Name zorunlu.");
+  }
+  if (!zipUrl) {
+    throw new Error("Zip URL zorunlu.");
+  }
+
   const payload = {
     app_name: appName,
     workspace: workspace,
     source: { type: "zip", zip_url: zipUrl },
     image: {
-      project: project || appName,
+      project: project || deriveImageProject(appName),
       tag: tag || "latest",
       registry: registry || "lenovo:8443"
     },
@@ -1131,34 +1179,6 @@ function buildZipPayload() {
   const depType = dep?.type || "none";
   if (dep) payload.dependency = dep;
   const migration = buildMigrationPayload("zip", depType);
-  if (migration) payload.migration = migration;
-  return payload;
-}
-
-function buildLocalPayload() {
-  const appName = document.getElementById("localAppName").value.trim();
-  const workspace = document.getElementById("localWorkspace").value.trim();
-  const localPath = document.getElementById("localPath").value.trim();
-  const project = document.getElementById("localImageProject").value.trim();
-  const tag = document.getElementById("localImageTag").value.trim();
-  const registry = document.getElementById("localRegistry").value.trim();
-  const port = parseInt(document.getElementById("localPort").value, 10) || 3000;
-
-  const payload = {
-    app_name: appName,
-    workspace: workspace,
-    source: { type: "local", local_path: localPath },
-    image: {
-      project: project || appName,
-      tag: tag || "latest",
-      registry: registry || "lenovo:8443"
-    },
-    deploy: { container_port: port }
-  };
-  const dep = buildDependencyPayload("local");
-  const depType = dep?.type || "none";
-  if (dep) payload.dependency = dep;
-  const migration = buildMigrationPayload("local", depType);
   if (migration) payload.migration = migration;
   return payload;
 }
@@ -1220,35 +1240,6 @@ function fillZipForm(sample) {
   document.getElementById("zipMigrationArgs").value = Array.isArray(sample.migration?.args) ? sample.migration.args.join(",") : "";
   document.getElementById("zipMigrationEnv").value = sample.migration?.env_name || "ConnectionStrings__DefaultConnection";
   updateDependencyVisibility("zip");
-}
-
-function fillLocalForm(sample) {
-  document.getElementById("localAppName").value = sample.app_name;
-  document.getElementById("localWorkspace").value = sample.workspace;
-  document.getElementById("localPath").value = sample.source.local_path || "";
-  document.getElementById("localImageProject").value = sample.image.project;
-  document.getElementById("localImageTag").value = sample.image.tag;
-  document.getElementById("localRegistry").value = sample.image.registry;
-  document.getElementById("localPort").value = sample.deploy.container_port;
-  const depType = sample.dependency?.type || "none";
-  document.getElementById("localDepType").value = depType;
-  document.getElementById("localRedisImage").value = sample.dependency?.redis?.image || "lenovo:8443/library/redis:7-alpine";
-  document.getElementById("localRedisService").value = sample.dependency?.redis?.service_name || "redis";
-  document.getElementById("localRedisPort").value = sample.dependency?.redis?.port || 6379;
-  document.getElementById("localRedisEnv").value = sample.dependency?.redis?.connection_env || "ConnectionStrings__Redis";
-  document.getElementById("localSqlImage").value = sample.dependency?.sql?.image || "lenovo:8443/library/postgres:16-alpine";
-  document.getElementById("localSqlService").value = sample.dependency?.sql?.service_name || "postgres";
-  document.getElementById("localSqlPort").value = sample.dependency?.sql?.port || 5432;
-  document.getElementById("localSqlDb").value = sample.dependency?.sql?.database || "AppDb";
-  document.getElementById("localSqlUser").value = sample.dependency?.sql?.username || "postgres";
-  document.getElementById("localSqlPass").value = sample.dependency?.sql?.password || "";
-  document.getElementById("localSqlEnv").value = sample.dependency?.sql?.connection_env || "ConnectionStrings__DefaultConnection";
-  document.getElementById("localMigrationEnabled").value = sample.migration?.enabled ? "true" : "false";
-  document.getElementById("localMigrationImage").value = sample.migration?.image || "";
-  document.getElementById("localMigrationCmd").value = Array.isArray(sample.migration?.command) ? sample.migration.command.join(",") : "";
-  document.getElementById("localMigrationArgs").value = Array.isArray(sample.migration?.args) ? sample.migration.args.join(",") : "";
-  document.getElementById("localMigrationEnv").value = sample.migration?.env_name || "ConnectionStrings__DefaultConnection";
-  updateDependencyVisibility("local");
 }
 
 function closeSampleModal() {
@@ -1394,49 +1385,8 @@ const sampleZip = {
   }
 };
 
-const sampleLocal = {
-  app_name: "demoapp",
-  workspace: "ws-demo",
-  source: {
-    type: "local",
-    local_path: "/mnt/projects/demoapp"
-  },
-  image: {
-    project: "demoapp",
-    tag: "latest",
-    registry: "lenovo:8443"
-  },
-  deploy: { container_port: 3000 },
-  dependency: {
-    type: "both",
-    redis: {
-      image: "lenovo:8443/library/redis:7-alpine",
-      service_name: "redis",
-      port: 6379,
-      connection_env: "ConnectionStrings__Redis"
-    },
-    sql: {
-      image: "lenovo:8443/library/postgres:16-alpine",
-      service_name: "postgres",
-      port: 5432,
-      database: "AppDb",
-      username: "postgres",
-      password: "StrongPass_123!",
-      connection_env: "ConnectionStrings__DefaultConnection"
-    }
-  },
-  migration: {
-    enabled: true,
-    image: "",
-    command: [],
-    args: [],
-    env_name: "ConnectionStrings__DefaultConnection"
-  }
-};
-
 document.getElementById("sampleGit").onclick = () => showSampleModal("Git Sample JSON", sampleGit, fillGitForm);
 document.getElementById("sampleZip").onclick = () => showSampleModal("ZIP Sample JSON", sampleZip, fillZipForm);
-document.getElementById("sampleLocal").onclick = () => showSampleModal("Local Sample JSON", sampleLocal, fillLocalForm);
 
 document.getElementById("healthBtn").onclick = async () => {
   await handleRequest("GET", "/healthz");
@@ -1455,10 +1405,10 @@ async function submitRun(payload) {
     if (e2eWorkspaceEl && res.body?.workspace) e2eWorkspaceEl.value = res.body.workspace;
     if (e2eAppEl && res.body?.app) e2eAppEl.value = res.body.app;
     if (e2eRunIdEl && res.body?.run_id) e2eRunIdEl.value = res.body.run_id;
-    if (runLogEl) {
-      runLogEl.textContent = "Loglar geliyor...";
-      runLogEl.scrollIntoView({ behavior: "smooth", block: "start" });
+    if (e2eSectionEl) {
+      e2eSectionEl.scrollIntoView({ behavior: "smooth", block: "start" });
     }
+    await fetchE2ELogs();
   }
   await refreshWorkspaces();
 }
@@ -1478,15 +1428,6 @@ document.getElementById("runZipBtn").onclick = async () => {
     await submitRun(payload);
   } catch (err) {
     addActivity({ method: "UI", endpoint: "zip/validate", status: 400, message: String(err.message || err) });
-  }
-};
-
-document.getElementById("runLocalBtn").onclick = async () => {
-  try {
-    const payload = buildLocalPayload();
-    await submitRun(payload);
-  } catch (err) {
-    addActivity({ method: "UI", endpoint: "local/validate", status: 400, message: String(err.message || err) });
   }
 };
 
@@ -1511,10 +1452,6 @@ if (runTaskNsEl) {
   };
 }
 
-document.getElementById("runRefresh").onclick = async () => {
-  await refreshRunStatus();
-  await refreshRunLogs();
-};
 document.getElementById("e2eFillBtn").onclick = () => {
   syncE2EInputs();
   if (e2eStatusEl) e2eStatusEl.textContent = "Form filled from selection.";
@@ -1526,12 +1463,9 @@ document.getElementById("e2eFetchBtn").onclick = async () => {
 document.getElementById("gitDepType").onchange = updateGitDependencyVisibility;
 document.getElementById("gitMigrationEnabled").onchange = updateGitDependencyVisibility;
 document.getElementById("zipDepType").onchange = () => updateDependencyVisibility("zip");
-document.getElementById("localDepType").onchange = () => updateDependencyVisibility("local");
 document.getElementById("zipMigrationEnabled").onchange = () => updateDependencyVisibility("zip");
-document.getElementById("localMigrationEnabled").onchange = () => updateDependencyVisibility("local");
 updateGitDependencyVisibility();
 updateDependencyVisibility("zip");
-updateDependencyVisibility("local");
 
 healthCheck();
 loadHostInfo();

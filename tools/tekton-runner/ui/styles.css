@@ -208,10 +208,11 @@ body {
   border-radius: 12px;
   padding: 12px;
   min-height: 160px;
-  max-height: 320px;
+  max-height: 520px;
   overflow: auto;
   font-family: var(--mono);
   font-size: 12px;
+  line-height: 1.6;
   color: #d5e6ff;
   white-space: pre-wrap;
 }
@@ -220,14 +221,32 @@ body {
   color: #d5e6ff;
 }
 
+.log-line.section {
+  color: #ffffff;
+  font-weight: 700;
+}
+
+.log-line.subhead {
+  color: #9fd3ff;
+  font-weight: 600;
+}
+
 .log-line.step {
   color: #62b5ff;
   font-weight: 600;
 }
 
+.log-line.ok {
+  color: #7fe2bb;
+}
+
 .log-line.error {
   color: #ff8f8f;
   font-weight: 700;
+}
+
+.log-line.meta {
+  color: #9fb0c8;
 }
 
 .metric-bar {

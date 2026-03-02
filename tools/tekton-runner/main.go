@@ -19,6 +19,7 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -27,16 +28,17 @@ import (
 )
 
 type Input struct {
-	Namespace  string     `json:"namespace"`
-	Task       string     `json:"task"`
-	AppName    string     `json:"app_name"`
-	Apps       []AppSpec  `json:"apps"`
-	Workspace  string     `json:"workspace"`
-	Deploy     Deploy     `json:"deploy"`
-	Source     Source     `json:"source"`
-	Image      Image      `json:"image"`
-	Dependency Dependency `json:"dependency"`
-	Migration  Migration  `json:"migration"`
+	Namespace   string      `json:"namespace"`
+	Task        string      `json:"task"`
+	AppName     string      `json:"app_name"`
+	Apps        []AppSpec   `json:"apps"`
+	Workspace   string      `json:"workspace"`
+	Deploy      Deploy      `json:"deploy"`
+	Source      Source      `json:"source"`
+	Image       Image       `json:"image"`
+	FileStorage FileStorage `json:"file_storage"`
+	Dependency  Dependency  `json:"dependency"`
+	Migration   Migration   `json:"migration"`
 }
 
 type AppSpec struct {
@@ -54,7 +56,6 @@ type Source struct {
 	GitUsername string     `json:"git_username"`
 	GitToken    string     `json:"git_token"`
 	GitSecret   string     `json:"git_secret"`
-	LocalPath   string     `json:"local_path"`
 	PVCName     string     `json:"pvc_name"`
 	ZipURL      string     `json:"zip_url"`
 	ZipUsername string     `json:"zip_username"`
@@ -84,6 +85,15 @@ type Image struct {
 	Project  string `json:"project"`
 	Tag      string `json:"tag"`
 	Registry string `json:"registry"`
+}
+
+type FileStorage struct {
+	Enabled   bool       `json:"enabled"`
+	PVCName   string     `json:"pvc_name"`
+	MountPath string     `json:"mount_path"`
+	SubPath   string     `json:"sub_path"`
+	NFS       *NFSConfig `json:"nfs"`
+	SMB       *SMBConfig `json:"smb"`
 }
 
 type TaskRunStatus struct {
@@ -146,6 +156,98 @@ type AppEnvSecretRef struct {
 	EnvName    string
 	SecretName string
 	SecretKey  string
+	Value      string
+}
+
+func appendEnvRef(refs []AppEnvSecretRef, envName, secretName, secretKey string) []AppEnvSecretRef {
+	envName = strings.TrimSpace(envName)
+	secretName = strings.TrimSpace(secretName)
+	secretKey = strings.TrimSpace(secretKey)
+	if envName == "" || secretName == "" || secretKey == "" {
+		return refs
+	}
+	for _, ref := range refs {
+		if ref.EnvName == envName {
+			return refs
+		}
+	}
+	return append(refs, AppEnvSecretRef{
+		EnvName:    envName,
+		SecretName: secretName,
+		SecretKey:  secretKey,
+	})
+}
+
+func appendEnvValue(refs []AppEnvSecretRef, envName, value string) []AppEnvSecretRef {
+	envName = strings.TrimSpace(envName)
+	value = strings.TrimSpace(value)
+	if envName == "" || value == "" {
+		return refs
+	}
+	for _, ref := range refs {
+		if ref.EnvName == envName {
+			return refs
+		}
+	}
+	return append(refs, AppEnvSecretRef{
+		EnvName: envName,
+		Value:   value,
+	})
+}
+
+func redisSecretData(host string, port int) map[string]string {
+	conn := fmt.Sprintf("%s:%d", host, port)
+	return map[string]string{
+		"redis-conn": conn,
+		"redis-url":  fmt.Sprintf("redis://%s/0", conn),
+		"redis-host": host,
+		"redis-port": strconv.Itoa(port),
+	}
+}
+
+func sqlSecretData(host string, cfg SQLDependency) map[string]string {
+	return map[string]string{
+		"sql-conn":     fmt.Sprintf("Host=%s;Port=%d;Database=%s;Username=%s;Password=%s;SSL Mode=Disable;", host, cfg.Port, cfg.Database, cfg.Username, cfg.Password),
+		"database-url": fmt.Sprintf("postgresql://%s:%s@%s:%d/%s?sslmode=disable", neturl.QueryEscape(cfg.Username), neturl.QueryEscape(cfg.Password), host, cfg.Port, neturl.PathEscape(cfg.Database)),
+		"db-host":      host,
+		"db-port":      strconv.Itoa(cfg.Port),
+		"db-name":      cfg.Database,
+		"db-user":      cfg.Username,
+		"db-password":  cfg.Password,
+		"db-sslmode":   "disable",
+	}
+}
+
+func defaultRedisEnvRefs(secretName string, cfg RedisDependency) []AppEnvSecretRef {
+	refs := make([]AppEnvSecretRef, 0, 6)
+	refs = appendEnvRef(refs, "REDIS_URL", secretName, "redis-url")
+	refs = appendEnvRef(refs, "REDIS_HOST", secretName, "redis-host")
+	refs = appendEnvRef(refs, "REDIS_PORT", secretName, "redis-port")
+	refs = appendEnvRef(refs, "REDIS_CONNECTION", secretName, "redis-conn")
+	refs = appendEnvRef(refs, "REDIS_CONNECTION_STRING", secretName, "redis-conn")
+	refs = appendEnvRef(refs, cfg.ConnectionEnv, secretName, "redis-conn")
+	return refs
+}
+
+func defaultSQLEnvRefs(secretName string, cfg SQLDependency) []AppEnvSecretRef {
+	refs := make([]AppEnvSecretRef, 0, 10)
+	refs = appendEnvRef(refs, "DATABASE_URL", secretName, "database-url")
+	refs = appendEnvRef(refs, "DB_HOST", secretName, "db-host")
+	refs = appendEnvRef(refs, "DB_PORT", secretName, "db-port")
+	refs = appendEnvRef(refs, "DB_NAME", secretName, "db-name")
+	refs = appendEnvRef(refs, "DB_USER", secretName, "db-user")
+	refs = appendEnvRef(refs, "DB_PASSWORD", secretName, "db-password")
+	refs = appendEnvRef(refs, "DB_SSLMODE", secretName, "db-sslmode")
+	refs = appendEnvRef(refs, "SQL_CONNECTION_STRING", secretName, "sql-conn")
+	refs = appendEnvRef(refs, "DEFAULT_CONNECTION", secretName, "sql-conn")
+	refs = appendEnvRef(refs, cfg.ConnectionEnv, secretName, "sql-conn")
+	return refs
+}
+
+type ResolvedFileStorage struct {
+	PVCName   string
+	MountPath string
+	SubPath   string
 }
 
 type Migration struct {
@@ -171,7 +273,6 @@ type RenderContext struct {
 	SourceType   string
 	RepoURL      string
 	Revision     string
-	LocalPath    string
 	Project      string
 	Tag          string
 	Registry     string
@@ -179,9 +280,7 @@ type RenderContext struct {
 	ZipUsername  string
 	ZipPassword  string
 	GitSecret    string
-	PVCName      string
 	HasGit       bool
-	HasLocal     bool
 	HasZip       bool
 	AppName      string
 	ContextSub   string
@@ -293,6 +392,25 @@ func normalizeContextSubDir(raw string) (string, error) {
 	return strings.TrimPrefix(p, "./"), nil
 }
 
+func normalizeStorageSubPath(raw string) (string, error) {
+	s := strings.ReplaceAll(strings.TrimSpace(raw), "\\", "/")
+	s = strings.TrimPrefix(s, "./")
+	s = strings.Trim(s, "/")
+	if s == "" {
+		return "", nil
+	}
+	parts := strings.Split(s, "/")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p == "" || p == "." || p == ".." {
+			return "", fmt.Errorf("invalid file_storage.sub_path: %q", raw)
+		}
+		out = append(out, p)
+	}
+	return strings.Join(out, "/"), nil
+}
+
 func resolveAppTargets(in Input) ([]AppTarget, error) {
 	targets := make([]AppTarget, 0, 4)
 	basePort := in.Deploy.ContainerPort
@@ -344,7 +462,7 @@ func resolveAppTargets(in Input) ([]AppTarget, error) {
 		}
 		port := app.ContainerPort
 		if port == 0 {
-			port = basePort
+			return nil, fmt.Errorf("apps[%d].container_port is required for multi-app deploys", i)
 		}
 		ctx, err := normalizeContextSubDir(app.ContextSubDir)
 		if err != nil {
@@ -483,7 +601,7 @@ func main() {
 		}
 	}
 
-	if len(taskRunByApp) > 0 && (in.Source.Type == "zip" || in.Source.Type == "git" || in.Source.Type == "local") {
+	if len(taskRunByApp) > 0 && (in.Source.Type == "zip" || in.Source.Type == "git") {
 		if err := handleZipDeploy(in, targets, taskRunByApp, runID); err != nil {
 			emitRunEvent(runID, ws, app, "deploy", "failed", err.Error(), nil)
 			fatal("zip deploy", err)
@@ -678,7 +796,7 @@ func runServer(addr, apiKey string) {
 		}
 		emitRunEvent(runID, workspace, app, "manifests", "succeeded", "Prerequisite manifests applied", nil)
 
-		if len(taskRunByApp) > 0 && (in.Source.Type == "zip" || in.Source.Type == "git" || in.Source.Type == "local") {
+		if len(taskRunByApp) > 0 && (in.Source.Type == "zip" || in.Source.Type == "git") {
 			go func(req Input, tgts []AppTarget, taskRuns map[string]string, rid string) {
 				if err := handleZipDeploy(req, tgts, taskRuns, rid); err != nil {
 					emitRunEvent(rid, deriveWorkspace(req), deriveApp(req), "deploy", "failed", err.Error(), nil)
@@ -959,7 +1077,10 @@ func runServer(addr, apiKey string) {
 
 	http.HandleFunc("/run/logs", func(w http.ResponseWriter, r *http.Request) {
 		workspace := strings.TrimSpace(r.URL.Query().Get("workspace"))
-		app := sanitizeName(r.URL.Query().Get("app"))
+		app := strings.TrimSpace(r.URL.Query().Get("app"))
+		if app != "" {
+			app = sanitizeName(app)
+		}
 		runID := strings.TrimSpace(r.URL.Query().Get("run_id"))
 		limit := 300
 		if v := strings.TrimSpace(r.URL.Query().Get("limit")); v != "" {
@@ -1047,37 +1168,97 @@ func runServer(addr, apiKey string) {
 		if format == "text" {
 			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 			var b strings.Builder
-			b.WriteString("=== Timeline Events ===\n")
+			writeTextLogSection(&b, "Run Summary")
+			fmt.Fprintf(&b, "Workspace : %s\n", workspace)
+			if app != "" {
+				fmt.Fprintf(&b, "App       : %s\n", app)
+			}
+			if runID != "" {
+				fmt.Fprintf(&b, "Run ID    : %s\n", runID)
+			}
+			fmt.Fprintf(&b, "Events    : %d\n", len(events))
+			if len(events) > 0 {
+				fmt.Fprintf(&b, "Started   : %s\n", events[0].Timestamp)
+				fmt.Fprintf(&b, "Updated   : %s\n", events[len(events)-1].Timestamp)
+			}
+
+			summary := summarizeRunEvents(events)
+			if len(summary) > 0 {
+				b.WriteString("\nLatest stage status:\n")
+				for _, e := range summary {
+					fmt.Fprintf(&b, "  %s %-12s %s\n", formatEventBadge(e.Status), e.Stage, e.Message)
+				}
+			}
+
+			writeTextLogSection(&b, "Timeline")
 			for _, e := range events {
-				fmt.Fprintf(&b, "%s | run=%s | ws=%s | app=%s | %s/%s | %s\n",
-					e.Timestamp, e.RunID, e.Workspace, e.App, e.Stage, e.Status, e.Message)
+				fmt.Fprintf(&b, "%s %s %-12s %s\n",
+					e.Timestamp, formatEventBadge(e.Status), e.Stage, e.Message)
+				if len(e.Meta) > 0 {
+					metaKeys := make([]string, 0, len(e.Meta))
+					for k := range e.Meta {
+						metaKeys = append(metaKeys, k)
+					}
+					sort.Strings(metaKeys)
+					for _, k := range metaKeys {
+						fmt.Fprintf(&b, "  - %s: %s\n", k, e.Meta[k])
+					}
+				}
 			}
 			if includeTaskRun {
-				b.WriteString("\n=== TaskRun Logs ===\n")
+				writeTextLogSection(&b, "TaskRun Logs")
 				for _, tr := range taskrunLogs {
-					fmt.Fprintf(&b, "\n--- taskrun=%s namespace=%s ---\n", tr.TaskRun, tr.Namespace)
+					fmt.Fprintf(&b, "--- TaskRun %s (ns=%s", tr.TaskRun, tr.Namespace)
+					if tr.Source != "" {
+						fmt.Fprintf(&b, ", source=%s", tr.Source)
+					}
+					if tr.Collected != "" {
+						fmt.Fprintf(&b, ", collected=%s", tr.Collected)
+					}
+					b.WriteString(") ---\n")
 					if tr.Error != "" {
 						fmt.Fprintf(&b, "ERROR: %s\n", tr.Error)
 						continue
 					}
-					b.WriteString(tr.Logs)
-					if !strings.HasSuffix(tr.Logs, "\n") {
+					b.WriteString(trimLogBlock(tr.Logs))
+					if strings.TrimSpace(tr.Logs) != "" {
 						b.WriteString("\n")
 					}
+					b.WriteString("\n")
 				}
 			}
 			if includeContainers {
-				b.WriteString("\n=== Workspace Container Logs ===\n")
+				writeTextLogSection(&b, "Workspace Container Logs")
 				for _, c := range containerLogs {
-					fmt.Fprintf(&b, "\n--- pod=%s container=%s ---\n", c.Pod, c.Container)
+					fmt.Fprintf(&b, "--- Pod %s / Container %s", c.Pod, c.Container)
+					if c.Source != "" {
+						fmt.Fprintf(&b, " (source=%s", c.Source)
+						if c.Collected != "" {
+							fmt.Fprintf(&b, ", collected=%s", c.Collected)
+						}
+						b.WriteString(")")
+					}
+					b.WriteString(" ---\n")
 					if c.Error != "" {
 						fmt.Fprintf(&b, "ERROR: %s\n", c.Error)
 						continue
 					}
-					b.WriteString(c.Logs)
-					if !strings.HasSuffix(c.Logs, "\n") {
+					b.WriteString(trimLogBlock(c.Logs))
+					if strings.TrimSpace(c.Logs) != "" {
 						b.WriteString("\n")
 					}
+					b.WriteString("\n")
+				}
+			}
+			if len(errors) > 0 {
+				writeTextLogSection(&b, "Diagnostics")
+				keys := make([]string, 0, len(errors))
+				for k := range errors {
+					keys = append(keys, k)
+				}
+				sort.Strings(keys)
+				for _, k := range keys {
+					fmt.Fprintf(&b, "- %s: %s\n", k, errors[k])
 				}
 			}
 			w.Write([]byte(b.String()))
@@ -1413,16 +1594,6 @@ func buildManifests(in *Input) ([]string, []AppTarget, error) {
 			in.Source.GitSecret = "git-cred-" + randSuffix()
 		}
 		manifests = append(manifests, renderGitSecret(*in))
-	}
-
-	if in.Source.Type == "local" {
-		if in.Source.NFS != nil {
-			pv, pvc := renderNFS(*in)
-			manifests = append(manifests, pv, pvc)
-		} else if in.Source.SMB != nil {
-			secret, pv, pvc := renderSMB(*in)
-			manifests = append(manifests, secret, pv, pvc)
-		}
 	}
 
 	for _, t := range targets {
@@ -1869,22 +2040,6 @@ func prepareSourceForMirror(in Input) (string, func(), error) {
 			rc.Close()
 		}
 		return dir, cleanup, nil
-	case "local":
-		p := strings.TrimSpace(in.Source.LocalPath)
-		candidates := []string{p}
-		if !filepath.IsAbs(p) {
-			candidates = append(candidates, filepath.Join("/home/beko", p))
-		}
-		for _, c := range candidates {
-			if c == "" {
-				continue
-			}
-			info, err := os.Stat(c)
-			if err == nil && info.IsDir() {
-				return c, nil, nil
-			}
-		}
-		return "", nil, fmt.Errorf("local_path is not accessible on runner host: %s", p)
 	default:
 		return "", nil, fmt.Errorf("unsupported source type for mirror: %s", in.Source.Type)
 	}
@@ -2185,12 +2340,50 @@ func handleZipDeploy(in Input, targets []AppTarget, taskRuns map[string]string, 
 		emitRunEvent(runID, workspace, leadApp, "migration", "succeeded", "Migration completed", nil)
 	}
 
+	backendServiceURL := ""
+	for _, t := range targets {
+		if t.AppName == "backend" {
+			backendServiceURL = fmt.Sprintf("http://%s.%s.svc.cluster.local", t.AppName, clusterName)
+			break
+		}
+	}
+
 	for _, t := range targets {
 		image := fmt.Sprintf("%s/%s/%s:%s", in.Image.Registry, strings.ToLower(t.Project), strings.ToLower(t.Project), t.Tag)
 		emitRunEvent(runID, workspace, t.AppName, "deploy", "running", "Applying deployment and service", map[string]string{
 			"image": image,
 		})
-		if err := applyDeployment(kcfgPath, clusterName, t.AppName, image, t.ContainerPort, envRefs); err != nil {
+		var storage *ResolvedFileStorage
+		if in.FileStorage.Enabled {
+			emitRunEvent(runID, workspace, t.AppName, "storage", "running", "Preparing shared file storage", nil)
+			storage, err = ensureSharedFileStorage(kcfgPath, clusterName, t.AppName, in.FileStorage)
+			if err != nil {
+				emitRunEvent(runID, workspace, t.AppName, "storage", "failed", err.Error(), nil)
+				return err
+			}
+			emitRunEvent(runID, workspace, t.AppName, "storage", "succeeded", "Shared file storage ready", map[string]string{
+				"pvc":        storage.PVCName,
+				"mount_path": storage.MountPath,
+				"sub_path":   storage.SubPath,
+			})
+		}
+		appEnvRefs := append([]AppEnvSecretRef{}, envRefs...)
+		if backendServiceURL != "" && t.AppName != "backend" {
+			appEnvRefs = appendEnvValue(appEnvRefs, "BACKEND_BASE_URL", backendServiceURL)
+			appEnvRefs = appendEnvValue(appEnvRefs, "BACKEND_URL", backendServiceURL)
+			appEnvRefs = appendEnvValue(appEnvRefs, "API_BASE_URL", backendServiceURL)
+			appEnvRefs = appendEnvValue(appEnvRefs, "VITE_API_BASE_URL", backendServiceURL)
+			appEnvRefs = appendEnvValue(appEnvRefs, "NEXT_PUBLIC_API_URL", backendServiceURL)
+		}
+		if err := applyDeployment(kcfgPath, clusterName, t.AppName, image, t.ContainerPort, appEnvRefs, storage); err != nil {
+			emitRunEvent(runID, workspace, t.AppName, "deploy", "failed", err.Error(), nil)
+			return err
+		}
+		if err := waitForDeploymentReady(kcfgPath, clusterName, t.AppName, 5*time.Minute); err != nil {
+			emitRunEvent(runID, workspace, t.AppName, "deploy", "failed", err.Error(), nil)
+			return err
+		}
+		if err := verifyDeploymentRuntimePort(kcfgPath, clusterName, t.AppName, t.ContainerPort); err != nil {
 			emitRunEvent(runID, workspace, t.AppName, "deploy", "failed", err.Error(), nil)
 			return err
 		}
@@ -2324,15 +2517,15 @@ func configureKindNode(clusterName string) error {
 	return nil
 }
 
-func applyDeployment(kubeconfig, namespace, app, image string, port int, envRefs []AppEnvSecretRef) error {
+func applyDeployment(kubeconfig, namespace, app, image string, port int, envRefs []AppEnvSecretRef, storage *ResolvedFileStorage) error {
 	if port == 0 {
 		port = 8080
 	}
-	manifest := renderDeployment(namespace, app, image, port, envRefs)
+	manifest := renderDeployment(namespace, app, image, port, envRefs, storage)
 	return kubectlApplyWithKubeconfig(kubeconfig, manifest)
 }
 
-func renderDeployment(ns, app, image string, port int, envRefs []AppEnvSecretRef) string {
+func renderDeployment(ns, app, image string, port int, envRefs []AppEnvSecretRef, storage *ResolvedFileStorage) string {
 	tpl := `apiVersion: v1
 kind: Namespace
 metadata:
@@ -2353,12 +2546,14 @@ spec:
       labels:
         app: {{.App}}
     spec:
+{{.VolumeBlock}}
       containers:
         - name: {{.App}}
           image: {{.Image}}
           ports:
             - containerPort: {{.Port}}
 {{.EnvBlock}}
+{{.VolumeMountBlock}}
 ---
 apiVersion: v1
 kind: Service
@@ -2374,11 +2569,13 @@ spec:
       targetPort: {{.Port}}
 `
 	return mustRender(tpl, map[string]string{
-		"Namespace": ns,
-		"App":       app,
-		"Image":     image,
-		"Port":      fmt.Sprintf("%d", port),
-		"EnvBlock":  renderEnvFromSecretBlock(envRefs),
+		"Namespace":        ns,
+		"App":              app,
+		"Image":            image,
+		"Port":             fmt.Sprintf("%d", port),
+		"EnvBlock":         renderEnvFromSecretBlock(envRefs),
+		"VolumeBlock":      renderFileStorageVolumeBlock(storage),
+		"VolumeMountBlock": renderFileStorageMountBlock(storage),
 	})
 }
 
@@ -2390,10 +2587,40 @@ func renderEnvFromSecretBlock(envRefs []AppEnvSecretRef) string {
 	b.WriteString("          env:\n")
 	for _, ref := range envRefs {
 		b.WriteString("            - name: " + ref.EnvName + "\n")
+		if strings.TrimSpace(ref.Value) != "" {
+			b.WriteString("              value: " + yamlQuote(ref.Value) + "\n")
+			continue
+		}
 		b.WriteString("              valueFrom:\n")
 		b.WriteString("                secretKeyRef:\n")
 		b.WriteString("                  name: " + ref.SecretName + "\n")
 		b.WriteString("                  key: " + ref.SecretKey + "\n")
+	}
+	return b.String()
+}
+
+func renderFileStorageVolumeBlock(storage *ResolvedFileStorage) string {
+	if storage == nil {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("      volumes:\n")
+	b.WriteString("        - name: shared-storage\n")
+	b.WriteString("          persistentVolumeClaim:\n")
+	b.WriteString("            claimName: " + storage.PVCName + "\n")
+	return b.String()
+}
+
+func renderFileStorageMountBlock(storage *ResolvedFileStorage) string {
+	if storage == nil {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("          volumeMounts:\n")
+	b.WriteString("            - name: shared-storage\n")
+	b.WriteString("              mountPath: " + yamlQuote(storage.MountPath) + "\n")
+	if strings.TrimSpace(storage.SubPath) != "" {
+		b.WriteString("              subPath: " + yamlQuote(storage.SubPath) + "\n")
 	}
 	return b.String()
 }
@@ -2426,6 +2653,214 @@ metadata:
 	return kubectlApplyWithKubeconfig(kubeconfig, manifest)
 }
 
+func ensureSharedFileStorage(kubeconfig, namespace, app string, fs FileStorage) (*ResolvedFileStorage, error) {
+	pvcName := sanitizeName(fs.PVCName)
+	if pvcName == "" {
+		pvcName = "shared-file-pvc"
+	}
+	if fs.NFS != nil {
+		if err := kubectlApplyWithKubeconfig(kubeconfig, renderSharedFileStorageNFS(namespace, pvcName, *fs.NFS)); err != nil {
+			return nil, fmt.Errorf("apply shared file storage NFS failed: %v", err)
+		}
+	} else if fs.SMB != nil {
+		if err := kubectlApplyWithKubeconfig(kubeconfig, renderSharedFileStorageSMB(namespace, pvcName, *fs.SMB)); err != nil {
+			return nil, fmt.Errorf("apply shared file storage SMB failed: %v", err)
+		}
+	} else if err := ensurePVCExists(kubeconfig, namespace, pvcName); err != nil {
+		return nil, err
+	}
+
+	subPath, err := resolveFileStorageSubPath(namespace, app, fs.SubPath)
+	if err != nil {
+		return nil, err
+	}
+	if err := ensureFileStorageSubPath(kubeconfig, namespace, pvcName, subPath); err != nil {
+		return nil, err
+	}
+	return &ResolvedFileStorage{
+		PVCName:   pvcName,
+		MountPath: fs.MountPath,
+		SubPath:   subPath,
+	}, nil
+}
+
+func ensurePVCExists(kubeconfig, namespace, pvcName string) error {
+	cmd := exec.Command("kubectl", "--kubeconfig", kubeconfig, "-n", namespace, "get", "pvc", pvcName)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("shared file storage pvc %s not found in %s: %s", pvcName, namespace, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+func resolveFileStorageSubPath(workspace, app, raw string) (string, error) {
+	if s, err := normalizeStorageSubPath(raw); err != nil {
+		return "", err
+	} else if s != "" {
+		return s, nil
+	}
+	return path.Join("shared", sanitizeName(workspace), sanitizeName(app)), nil
+}
+
+func ensureFileStorageSubPath(kubeconfig, namespace, pvcName, subPath string) error {
+	jobName := sanitizeName("fs-init-" + subPath + "-" + randSuffix())
+	if len(jobName) > 63 {
+		jobName = strings.Trim(sanitizeName(jobName[:63]), "-")
+	}
+	manifest := renderSharedFileStorageInitJob(namespace, jobName, pvcName, subPath)
+	if err := kubectlApplyWithKubeconfig(kubeconfig, manifest); err != nil {
+		return fmt.Errorf("apply shared storage init job failed: %v", err)
+	}
+	if err := waitForJobComplete(kubeconfig, namespace, jobName, 3*time.Minute); err != nil {
+		logs, _ := getJobLogs(kubeconfig, namespace, jobName)
+		if strings.TrimSpace(logs) != "" {
+			return fmt.Errorf("shared storage init job failed: %v\n%s", err, logs)
+		}
+		return fmt.Errorf("shared storage init job failed: %v", err)
+	}
+	return nil
+}
+
+func renderSharedFileStorageInitJob(namespace, name, pvcName, subPath string) string {
+	var b strings.Builder
+	b.WriteString("apiVersion: batch/v1\n")
+	b.WriteString("kind: Job\n")
+	b.WriteString("metadata:\n")
+	b.WriteString("  name: " + name + "\n")
+	b.WriteString("  namespace: " + namespace + "\n")
+	b.WriteString("spec:\n")
+	b.WriteString("  ttlSecondsAfterFinished: 60\n")
+	b.WriteString("  backoffLimit: 0\n")
+	b.WriteString("  template:\n")
+	b.WriteString("    spec:\n")
+	b.WriteString("      restartPolicy: Never\n")
+	b.WriteString("      volumes:\n")
+	b.WriteString("        - name: shared-storage\n")
+	b.WriteString("          persistentVolumeClaim:\n")
+	b.WriteString("            claimName: " + pvcName + "\n")
+	b.WriteString("      containers:\n")
+	b.WriteString("        - name: init\n")
+	b.WriteString("          image: lenovo:8443/library/alpine-git:2.45.2\n")
+	b.WriteString("          command:\n")
+	b.WriteString("            - /bin/sh\n")
+	b.WriteString("            - -lc\n")
+	b.WriteString("          args:\n")
+	b.WriteString("            - " + yamlQuote("mkdir -p /shared/"+subPath+" && chmod 0777 /shared/"+subPath) + "\n")
+	b.WriteString("          volumeMounts:\n")
+	b.WriteString("            - name: shared-storage\n")
+	b.WriteString("              mountPath: /shared\n")
+	return b.String()
+}
+
+func renderSharedFileStorageNFS(namespace, pvcName string, cfg NFSConfig) string {
+	pvName := sanitizeName(namespace + "-" + pvcName + "-pv")
+	tpl := `apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: {{.PVName}}
+spec:
+  capacity:
+    storage: {{.Size}}
+  storageClassName: ""
+  accessModes:
+    - ReadWriteMany
+  persistentVolumeReclaimPolicy: Retain
+  nfs:
+    server: {{.Server}}
+    path: {{.Path}}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{.PVCName}}
+  namespace: {{.Namespace}}
+spec:
+  storageClassName: ""
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: {{.Size}}
+  volumeName: {{.PVName}}
+`
+	return mustRender(tpl, map[string]string{
+		"PVName":    pvName,
+		"PVCName":   pvcName,
+		"Namespace": namespace,
+		"Size":      cfg.Size,
+		"Server":    cfg.Server,
+		"Path":      cfg.Path,
+	})
+}
+
+func renderSharedFileStorageSMB(namespace, pvcName string, cfg SMBConfig) string {
+	pvName := sanitizeName(namespace + "-" + pvcName + "-pv")
+	secretName := cfg.SecretName
+	if secretName == "" {
+		secretName = pvcName + "-smb-cred"
+	}
+	volumeHandle := cfg.VolumeHandle
+	if volumeHandle == "" {
+		volumeHandle = pvcName + "-smb"
+	}
+	tpl := `apiVersion: v1
+kind: Secret
+metadata:
+  name: {{.SecretName}}
+  namespace: {{.Namespace}}
+type: Opaque
+stringData:
+  username: {{.Username}}
+  password: {{.Password}}
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: {{.PVName}}
+spec:
+  capacity:
+    storage: {{.Size}}
+  storageClassName: ""
+  accessModes:
+    - ReadWriteMany
+  persistentVolumeReclaimPolicy: Retain
+  csi:
+    driver: smb.csi.k8s.io
+    volumeHandle: {{.VolumeHandle}}
+    volumeAttributes:
+      source: "//{{.Server}}/{{.Share}}"
+    nodeStageSecretRef:
+      name: {{.SecretName}}
+      namespace: {{.Namespace}}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{.PVCName}}
+  namespace: {{.Namespace}}
+spec:
+  storageClassName: ""
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: {{.Size}}
+  volumeName: {{.PVName}}
+`
+	return mustRender(tpl, map[string]string{
+		"PVName":       pvName,
+		"PVCName":      pvcName,
+		"Namespace":    namespace,
+		"SecretName":   secretName,
+		"Username":     yamlQuote(cfg.Username),
+		"Password":     yamlQuote(cfg.Password),
+		"Size":         cfg.Size,
+		"VolumeHandle": volumeHandle,
+		"Server":       cfg.Server,
+		"Share":        cfg.Share,
+	})
+}
+
 func ensureWorkspaceDependencies(kubeconfig, namespace, app string, dep Dependency) ([]AppEnvSecretRef, error) {
 	switch dep.Type {
 	case "", "none":
@@ -2441,18 +2876,12 @@ func ensureWorkspaceDependencies(kubeconfig, namespace, app string, dep Dependen
 		if err := waitForDeploymentReady(kubeconfig, namespace, depName, 5*time.Minute); err != nil {
 			return nil, fmt.Errorf("redis dependency not ready: %v", err)
 		}
-		conn := fmt.Sprintf("%s.%s.svc.cluster.local:%d", depName, namespace, dep.Redis.Port)
+		host := fmt.Sprintf("%s.%s.svc.cluster.local", depName, namespace)
 		secretName := app + "-app-config"
-		if err := kubectlApplyWithKubeconfig(kubeconfig, renderOpaqueSecret(namespace, secretName, map[string]string{
-			"redis-conn": conn,
-		})); err != nil {
+		if err := kubectlApplyWithKubeconfig(kubeconfig, renderOpaqueSecret(namespace, secretName, redisSecretData(host, dep.Redis.Port))); err != nil {
 			return nil, fmt.Errorf("apply redis app secret failed: %v", err)
 		}
-		return []AppEnvSecretRef{{
-			EnvName:    dep.Redis.ConnectionEnv,
-			SecretName: secretName,
-			SecretKey:  "redis-conn",
-		}}, nil
+		return defaultRedisEnvRefs(secretName, dep.Redis), nil
 	case "sql":
 		depName := sanitizeName(dep.SQL.ServiceName)
 		if depName == "" {
@@ -2470,18 +2899,12 @@ func ensureWorkspaceDependencies(kubeconfig, namespace, app string, dep Dependen
 		if err := waitForDeploymentReady(kubeconfig, namespace, depName, 6*time.Minute); err != nil {
 			return nil, fmt.Errorf("sql dependency not ready: %v", err)
 		}
-		conn := fmt.Sprintf("Host=%s.%s.svc.cluster.local;Port=%d;Database=%s;Username=%s;Password=%s;SSL Mode=Disable;", depName, namespace, dep.SQL.Port, dep.SQL.Database, dep.SQL.Username, dep.SQL.Password)
+		host := fmt.Sprintf("%s.%s.svc.cluster.local", depName, namespace)
 		secretName := app + "-app-config"
-		if err := kubectlApplyWithKubeconfig(kubeconfig, renderOpaqueSecret(namespace, secretName, map[string]string{
-			"sql-conn": conn,
-		})); err != nil {
+		if err := kubectlApplyWithKubeconfig(kubeconfig, renderOpaqueSecret(namespace, secretName, sqlSecretData(host, dep.SQL))); err != nil {
 			return nil, fmt.Errorf("apply sql app secret failed: %v", err)
 		}
-		return []AppEnvSecretRef{{
-			EnvName:    dep.SQL.ConnectionEnv,
-			SecretName: secretName,
-			SecretKey:  "sql-conn",
-		}}, nil
+		return defaultSQLEnvRefs(secretName, dep.SQL), nil
 	case "both":
 		redisName := sanitizeName(dep.Redis.ServiceName)
 		if redisName == "" {
@@ -2493,7 +2916,7 @@ func ensureWorkspaceDependencies(kubeconfig, namespace, app string, dep Dependen
 		if err := waitForDeploymentReady(kubeconfig, namespace, redisName, 5*time.Minute); err != nil {
 			return nil, fmt.Errorf("redis dependency not ready: %v", err)
 		}
-		redisConn := fmt.Sprintf("%s.%s.svc.cluster.local:%d", redisName, namespace, dep.Redis.Port)
+		redisHost := fmt.Sprintf("%s.%s.svc.cluster.local", redisName, namespace)
 
 		sqlName := sanitizeName(dep.SQL.ServiceName)
 		if sqlName == "" {
@@ -2511,26 +2934,20 @@ func ensureWorkspaceDependencies(kubeconfig, namespace, app string, dep Dependen
 		if err := waitForDeploymentReady(kubeconfig, namespace, sqlName, 6*time.Minute); err != nil {
 			return nil, fmt.Errorf("sql dependency not ready: %v", err)
 		}
-		sqlConn := fmt.Sprintf("Host=%s.%s.svc.cluster.local;Port=%d;Database=%s;Username=%s;Password=%s;SSL Mode=Disable;", sqlName, namespace, dep.SQL.Port, dep.SQL.Database, dep.SQL.Username, dep.SQL.Password)
+		sqlHost := fmt.Sprintf("%s.%s.svc.cluster.local", sqlName, namespace)
 		secretName := app + "-app-config"
-		if err := kubectlApplyWithKubeconfig(kubeconfig, renderOpaqueSecret(namespace, secretName, map[string]string{
-			"redis-conn": redisConn,
-			"sql-conn":   sqlConn,
-		})); err != nil {
+		secretData := redisSecretData(redisHost, dep.Redis.Port)
+		for k, v := range sqlSecretData(sqlHost, dep.SQL) {
+			secretData[k] = v
+		}
+		if err := kubectlApplyWithKubeconfig(kubeconfig, renderOpaqueSecret(namespace, secretName, secretData)); err != nil {
 			return nil, fmt.Errorf("apply combined app secret failed: %v", err)
 		}
-		return []AppEnvSecretRef{
-			{
-				EnvName:    dep.Redis.ConnectionEnv,
-				SecretName: secretName,
-				SecretKey:  "redis-conn",
-			},
-			{
-				EnvName:    dep.SQL.ConnectionEnv,
-				SecretName: secretName,
-				SecretKey:  "sql-conn",
-			},
-		}, nil
+		refs := defaultRedisEnvRefs(secretName, dep.Redis)
+		for _, ref := range defaultSQLEnvRefs(secretName, dep.SQL) {
+			refs = appendEnvRef(refs, ref.EnvName, ref.SecretName, ref.SecretKey)
+		}
+		return refs, nil
 	default:
 		return nil, fmt.Errorf("unsupported dependency.type: %s", dep.Type)
 	}
@@ -2651,6 +3068,64 @@ func waitForDeploymentReady(kubeconfig, namespace, name string, timeout time.Dur
 		return fmt.Errorf("%v: %s", err, strings.TrimSpace(string(out)))
 	}
 	return nil
+}
+
+func getDeploymentLogs(kubeconfig, namespace, name string, tail int) (string, error) {
+	cmd := exec.Command("kubectl", "--kubeconfig", kubeconfig, "-n", namespace, "logs", "deployment/"+name, "--tail", strconv.Itoa(tail))
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("%v: %s", err, strings.TrimSpace(string(out)))
+	}
+	return string(out), nil
+}
+
+func inferListeningPorts(logs string) []int {
+	patterns := []*regexp.Regexp{
+		regexp.MustCompile(`(?i)uvicorn running on http://[a-z0-9\.\-:]*:(\d+)`),
+		regexp.MustCompile(`(?i)url:\s*http://[a-z0-9\.\-:]*:(\d+)`),
+		regexp.MustCompile(`(?i)listening on [a-z0-9\.\-:]*:(\d+)`),
+		regexp.MustCompile(`(?i)running on http://[a-z0-9\.\-:]*:(\d+)`),
+		regexp.MustCompile(`(?i)server started.*:(\d+)`),
+	}
+	seen := map[int]bool{}
+	ports := make([]int, 0, 4)
+	for _, re := range patterns {
+		matches := re.FindAllStringSubmatch(logs, -1)
+		for _, m := range matches {
+			if len(m) < 2 {
+				continue
+			}
+			p, err := strconv.Atoi(strings.TrimSpace(m[1]))
+			if err != nil || p <= 0 || seen[p] {
+				continue
+			}
+			seen[p] = true
+			ports = append(ports, p)
+		}
+	}
+	sort.Ints(ports)
+	return ports
+}
+
+func verifyDeploymentRuntimePort(kubeconfig, namespace, app string, expectedPort int) error {
+	logs, err := getDeploymentLogs(kubeconfig, namespace, app, 120)
+	if err != nil {
+		return nil
+	}
+	ports := inferListeningPorts(logs)
+	if len(ports) == 0 {
+		return nil
+	}
+	for _, p := range ports {
+		if p == expectedPort {
+			return nil
+		}
+	}
+	found := make([]string, 0, len(ports))
+	for _, p := range ports {
+		found = append(found, strconv.Itoa(p))
+	}
+	return fmt.Errorf("runtime port mismatch for %s: declared container_port=%d but logs indicate %s", app, expectedPort, strings.Join(found, ", "))
 }
 
 func renderRedisManifest(namespace, name, image string, port int) string {
@@ -3353,12 +3828,11 @@ func openAPISpec() string {
           "source": {
             "type": "object",
             "properties": {
-              "type": { "type": "string", "enum": ["git","local","zip"] },
+              "type": { "type": "string", "enum": ["git","zip"] },
               "repo_url": { "type": "string" },
               "revision": { "type": "string" },
               "git_username": { "type": "string" },
               "git_token": { "type": "string" },
-              "local_path": { "type": "string" },
               "pvc_name": { "type": "string" },
               "zip_url": { "type": "string" },
               "zip_username": { "type": "string" },
@@ -3542,6 +4016,51 @@ func parseBoolQuery(v string, def bool) bool {
 		return def
 	}
 	return v == "1" || v == "true" || v == "yes" || v == "on"
+}
+
+func formatEventBadge(status string) string {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "succeeded", "success", "ok", "completed":
+		return "[OK]"
+	case "failed", "error":
+		return "[FAIL]"
+	case "running", "accepted", "submitted":
+		return "[RUN]"
+	default:
+		return "[INFO]"
+	}
+}
+
+func summarizeRunEvents(events []RunEvent) []RunEvent {
+	if len(events) == 0 {
+		return nil
+	}
+	lastByStage := map[string]RunEvent{}
+	order := make([]string, 0, len(events))
+	for _, ev := range events {
+		if _, ok := lastByStage[ev.Stage]; !ok {
+			order = append(order, ev.Stage)
+		}
+		lastByStage[ev.Stage] = ev
+	}
+	out := make([]RunEvent, 0, len(order))
+	for _, stage := range order {
+		out = append(out, lastByStage[stage])
+	}
+	return out
+}
+
+func trimLogBlock(s string) string {
+	return strings.TrimRight(s, "\n")
+}
+
+func writeTextLogSection(b *strings.Builder, title string) {
+	if b.Len() > 0 {
+		b.WriteString("\n")
+	}
+	b.WriteString("=== ")
+	b.WriteString(title)
+	b.WriteString(" ===\n")
 }
 
 type archivedRawLog struct {
@@ -4554,6 +5073,20 @@ func setDefaults(in *Input) {
 	if in.Source.SMB != nil && in.Source.SMB.Size == "" {
 		in.Source.SMB.Size = "50Gi"
 	}
+	if in.FileStorage.Enabled {
+		if strings.TrimSpace(in.FileStorage.PVCName) == "" {
+			in.FileStorage.PVCName = "shared-file-pvc"
+		}
+		if strings.TrimSpace(in.FileStorage.MountPath) == "" {
+			in.FileStorage.MountPath = "/app/storage"
+		}
+		if in.FileStorage.NFS != nil && in.FileStorage.NFS.Size == "" {
+			in.FileStorage.NFS.Size = "50Gi"
+		}
+		if in.FileStorage.SMB != nil && in.FileStorage.SMB.Size == "" {
+			in.FileStorage.SMB.Size = "50Gi"
+		}
+	}
 	if in.Deploy.ContainerPort == 0 {
 		in.Deploy.ContainerPort = 8080
 	}
@@ -4608,25 +5141,39 @@ func setDefaults(in *Input) {
 }
 
 func validate(in *Input) error {
-	if in.Source.Type != "git" && in.Source.Type != "local" && in.Source.Type != "zip" {
-		return fmt.Errorf("source.type must be git, local, or zip")
+	if in.Source.Type != "git" && in.Source.Type != "zip" {
+		return fmt.Errorf("source.type must be git or zip")
 	}
 	if in.Source.Type == "git" {
 		if in.Source.RepoURL == "" {
 			return fmt.Errorf("source.repo_url is required for git")
 		}
 	}
-	if in.Source.Type == "local" {
-		if in.Source.LocalPath == "" {
-			return fmt.Errorf("source.local_path is required for local")
-		}
-		if in.Source.PVCName == "" && in.Source.NFS == nil && in.Source.SMB == nil {
-			return fmt.Errorf("source.pvc_name or source.nfs/source.smb is required for local")
-		}
-	}
 	if in.Source.Type == "zip" {
 		if in.Source.ZipURL == "" {
 			return fmt.Errorf("source.zip_url is required for zip")
+		}
+	}
+	if in.FileStorage.Enabled {
+		if strings.TrimSpace(in.FileStorage.PVCName) == "" {
+			return fmt.Errorf("file_storage.pvc_name is required when file_storage.enabled=true")
+		}
+		if !strings.HasPrefix(strings.TrimSpace(in.FileStorage.MountPath), "/") {
+			return fmt.Errorf("file_storage.mount_path must be an absolute path")
+		}
+		if _, err := normalizeStorageSubPath(in.FileStorage.SubPath); err != nil {
+			return err
+		}
+		if in.FileStorage.NFS != nil && (strings.TrimSpace(in.FileStorage.NFS.Server) == "" || strings.TrimSpace(in.FileStorage.NFS.Path) == "") {
+			return fmt.Errorf("file_storage.nfs.server and file_storage.nfs.path are required")
+		}
+		if in.FileStorage.SMB != nil {
+			if strings.TrimSpace(in.FileStorage.SMB.Server) == "" || strings.TrimSpace(in.FileStorage.SMB.Share) == "" {
+				return fmt.Errorf("file_storage.smb.server and file_storage.smb.share are required")
+			}
+			if strings.TrimSpace(in.FileStorage.SMB.Username) == "" || strings.TrimSpace(in.FileStorage.SMB.Password) == "" {
+				return fmt.Errorf("file_storage.smb.username and file_storage.smb.password are required")
+			}
 		}
 	}
 	if _, err := normalizeContextSubDir(in.Source.ContextSub); err != nil {
@@ -4643,6 +5190,9 @@ func validate(in *Input) error {
 		for i, app := range in.Apps {
 			if strings.TrimSpace(app.AppName) == "" {
 				return fmt.Errorf("apps[%d].app_name is required", i)
+			}
+			if app.ContainerPort <= 0 {
+				return fmt.Errorf("apps[%d].container_port is required for multi-app deploys", i)
 			}
 			if _, err := normalizeContextSubDir(app.ContextSubDir); err != nil {
 				return fmt.Errorf("apps[%d]: %w", i, err)
@@ -4854,7 +5404,6 @@ func renderTaskRun(in Input, target AppTarget) string {
 		SourceType:   in.Source.Type,
 		RepoURL:      in.Source.RepoURL,
 		Revision:     in.Source.Revision,
-		LocalPath:    in.Source.LocalPath,
 		Project:      target.Project,
 		Tag:          target.Tag,
 		Registry:     in.Image.Registry,
@@ -4862,9 +5411,7 @@ func renderTaskRun(in Input, target AppTarget) string {
 		ZipUsername:  in.Source.ZipUsername,
 		ZipPassword:  in.Source.ZipPassword,
 		GitSecret:    in.Source.GitSecret,
-		PVCName:      in.Source.PVCName,
 		HasGit:       in.Source.Type == "git" && in.Source.GitUsername != "" && in.Source.GitToken != "",
-		HasLocal:     in.Source.Type == "local",
 		HasZip:       in.Source.Type == "zip",
 		AppName:      target.AppName,
 		ContextSub:   target.ContextSubDir,
@@ -4915,10 +5462,6 @@ spec:
     - name: context-sub-path
       value: {{.ContextSub}}
 {{- end }}
-{{- if eq .SourceType "local" }}
-    - name: local-path
-      value: {{.LocalPath}}
-{{- end }}
   workspaces:
     - name: source
       emptyDir: {}
@@ -4926,11 +5469,6 @@ spec:
     - name: git-credentials
       secret:
         secretName: {{.GitSecret}}
-{{- end }}
-{{- if .HasLocal }}
-    - name: local-source
-      persistentVolumeClaim:
-        claimName: {{.PVCName}}
 {{- end }}
 `
 

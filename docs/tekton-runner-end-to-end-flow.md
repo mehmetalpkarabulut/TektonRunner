@@ -6,7 +6,7 @@ Bu dokuman, sistemde **Tekton**, **tekton-runner** ve **Harbor** rollerini basta
 
 - **Tekton**:
   - CI engine'dir.
-  - Source alir (git/zip/local), image build eder, Harbor'a pushlar.
+  - Source alir (git/zip), image build eder, Harbor'a pushlar.
 - **tekton-runner**:
   - API ve orchestration katmanidir.
   - JSON istegini alir, Tekton manifestlerini uretir, Tekton'u tetikler.
@@ -24,7 +24,7 @@ Bu dokuman, sistemde **Tekton**, **tekton-runner** ve **Harbor** rollerini basta
    - TaskRun ve ilgili manifestleri olusturur.
 3. `tekton-runner` manifestleri apply eder.
 4. **Tekton TaskRun** calisir:
-   - source fetch (git/zip/local),
+   - source fetch (git/zip),
    - Dockerfile/build context hazirlama,
    - Kaniko ile image build,
    - Harbor'a push.
@@ -33,6 +33,7 @@ Bu dokuman, sistemde **Tekton**, **tekton-runner** ve **Harbor** rollerini basta
    - dependency (`redis/sql/both`) deploy,
    - opsiyonel migration job,
    - app deployment + service apply,
+   - runtime port / env uyumluluk kontrolu,
    - external port forward / endpoint map guncelleme.
 7. Kullanici app'e endpoint/external port uzerinden erisir.
 
@@ -50,9 +51,8 @@ Yani:
 `source.type`:
 - `git`
 - `zip`
-- `local`
 
-Bu uc source tipi icin de ayni mantik gecerlidir:
+Bu iki source tipi icin de ayni mantik gecerlidir:
 - Tekton build/push yapar,
 - tekton-runner deployment ve dependency yonetir.
 
@@ -88,6 +88,7 @@ Notlar:
 Olasilar:
 - workspace node `lenovo` cozemiyor (`no such host`),
 - dependency eksik (ornek app Redis bekliyor),
+- app gercekte baska portta dinliyor (ornek `8000`/`8501`) ama deploy farkli `container_port` ile yapildi,
 - SQL login hatasi,
 - external forward/endpoint portu yanlis.
 

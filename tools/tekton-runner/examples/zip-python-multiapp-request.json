@@ -1,0 +1,37 @@
+{
+  "workspace": "ws-python",
+  "source": {
+    "type": "zip",
+    "zip_url": "http://zip-server.tekton-pipelines.svc.cluster.local:8080/python-suite.zip"
+  },
+  "image": {
+    "registry": "lenovo:8443",
+    "tag": "latest"
+  },
+  "dependency": {
+    "type": "both",
+    "redis": {
+      "port": 6379
+    },
+    "sql": {
+      "port": 5432,
+      "database": "AppDb",
+      "username": "postgres",
+      "password": "StrongPass_123!"
+    }
+  },
+  "apps": [
+    {
+      "app_name": "backend",
+      "project": "backend",
+      "container_port": 8000,
+      "context_sub_path": "backend"
+    },
+    {
+      "app_name": "ui",
+      "project": "ui",
+      "container_port": 8501,
+      "context_sub_path": "ui"
+    }
+  ]
+}

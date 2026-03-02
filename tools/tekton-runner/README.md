@@ -35,36 +35,31 @@ cat request.json | ./tekton-runner
   "namespace": "tekton-pipelines",
   "task": "build-and-push-generic",
   "source": {
-    "type": "git|local|zip",
+    "type": "git|zip",
     "repo_url": "https://github.com/user/repo",
     "revision": "main",
     "git_username": "user",
     "git_token": "token",
     "git_secret": "optional-secret-name",
-    "local_path": "projeler/myapp",
-    "pvc_name": "pvc-nfs-123",
     "zip_url": "https://example.com/source.zip",
     "zip_username": "user",
-    "zip_password": "pass",
-    "nfs": {
-      "server": "10.0.0.10",
-      "path": "/exports/projects",
-      "size": "50Gi"
-    },
-    "smb": {
-      "server": "fileserver.local",
-      "share": "projects",
-      "username": "user",
-      "password": "pass",
-      "size": "50Gi",
-      "volume_handle": "optional-handle",
-      "secret_name": "optional-secret"
-    }
+    "zip_password": "pass"
   },
   "image": {
     "project": "myapp",
     "tag": "latest",
     "registry": "lenovo:8443"
+  },
+  "file_storage": {
+    "enabled": true,
+    "pvc_name": "shared-file-pvc",
+    "mount_path": "/app/storage",
+    "sub_path": "shared/ws-myapp/myapp",
+    "nfs": {
+      "server": "10.0.0.10",
+      "path": "/exports/shared",
+      "size": "50Gi"
+    }
   }
 }
 ```
@@ -72,9 +67,11 @@ cat request.json | ./tekton-runner
 ## Notlar
 
 - `source.type=git` için `repo_url` zorunlu.
-- `source.type=local` için `local_path` zorunlu ve `pvc_name` ya da `nfs/smb` zorunlu.
 - Git kullanıcı/şifre verilirse secret otomatik oluşturulur.
 - NFS/SMB bilgisi verilirse PV+PVC (ve SMB secret) otomatik oluşturulur.
+- `file_storage.enabled=true` verilirse uygulama pod'una ortak RWX storage mount edilir.
+- `file_storage.sub_path` bos birakilirsa otomatik olarak `shared/<workspace>/<app>` olusturulur.
+- `file_storage.nfs` veya `file_storage.smb` verilirse workspace cluster icinde ilgili PVC otomatik olusturulur. Verilmezse `file_storage.pvc_name` zaten var olmalidir.
 
 ## SMB Notu
 
@@ -190,7 +187,7 @@ Ornek:
     {
       "app_name": "memo-ui",
       "project": "memo-ui",
-      "container_port": 80,
+      "container_port": 8501,
       "context_sub_path": "ui"
     }
   ]
@@ -199,10 +196,62 @@ Ornek:
 
 Notlar:
 - `apps[]` verildiginde `app_name` ve `image.project` zorunlu degildir.
+- `apps[]` kullaniliyorsa her uygulama icin `container_port` zorunludur.
 - `apps[].project` bossa `apps[].app_name` kullanilir.
 - `apps[].tag` bossa `image.tag` (yoksa `latest`) kullanilir.
 - `context_sub_path` verilirse build context o alt klasor olur.
+- `container_port` uygulamanin gercek dinledigi port olmalidir. Ornek: FastAPI/Uvicorn cogu zaman `8000`, Streamlit `8501`.
 - `source.type=zip` icin `apps[]` ve `source.context_sub_path` verilmezse, ZIP icindeki tum Dockerfile konumlari otomatik taranir ve her Dockerfile icin otomatik app olusturulur (multi-app run).
+- Deploy sonrasi pod loglari taranir; uygulama logu farkli bir listening port yaziyorsa run `deploy failed` olur.
+
+### Multi-App Python Ornegi (FastAPI + Streamlit)
+
+```json
+{
+  "workspace": "ws-python",
+  "source": {
+    "type": "zip",
+    "zip_url": "http://zip-server.tekton-pipelines.svc.cluster.local:8080/python-suite.zip"
+  },
+  "image": {
+    "registry": "lenovo:8443",
+    "tag": "latest"
+  },
+  "dependency": {
+    "type": "both",
+    "redis": {
+      "port": 6379
+    },
+    "sql": {
+      "port": 5432,
+      "database": "AppDb",
+      "username": "postgres",
+      "password": "StrongPass_123!"
+    }
+  },
+  "apps": [
+    {
+      "app_name": "backend",
+      "project": "backend",
+      "container_port": 8000,
+      "context_sub_path": "backend"
+    },
+    {
+      "app_name": "ui",
+      "project": "ui",
+      "container_port": 8501,
+      "context_sub_path": "ui"
+    }
+  ]
+}
+```
+
+Bu tip bir pakette runner otomatik olarak frontend app'lere asagidaki alias env'leri enjekte eder:
+- `BACKEND_BASE_URL`
+- `BACKEND_URL`
+- `API_BASE_URL`
+- `VITE_API_BASE_URL`
+- `NEXT_PUBLIC_API_URL`
 
 ## Dependency Orchestration (Redis / SQL)
 
@@ -217,6 +266,14 @@ Akis:
 5. Uygulama Deployment'i Secret'tan env override ile ayaga kalkar.
 
 Not: `appsettings.json` fiziksel degistirilmez. .NET tarafinda env (`ConnectionStrings__...`) appsettings degerini runtime'da override eder.
+
+Runner ayni anda ortak env'leri de uretir:
+- `DATABASE_URL`
+- `REDIS_URL`
+- `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`, `DB_SSLMODE`
+- `REDIS_HOST`, `REDIS_PORT`
+
+Boylece .NET, Python, Node.js ve benzeri farkli uygulamalar ayni dependency akisini kullanabilir.
 
 ### Dependency JSON Ornegi (Redis)
 
@@ -344,7 +401,7 @@ Bu tarihte eklenenler:
 ## 2026-02-23 Update Summary
 
 Bu tarihte eklenenler:
-- ZIP Build ve Local Build UI formlarina dependency secimi eklendi (`none|redis|sql|both`)
+- ZIP Build UI formuna dependency secimi eklendi (`none|redis|sql|both`)
 - ZIP/Local formlarina SQL zorunlu alanlari eklendi (`database`, `password`)
 - ZIP/Local icin advanced dependency override alanlari eklendi (redis/sql image, service, port, env)
 - CLI `-apply` akisinda deploy/dependency orchestration `git|zip|local` icin ayni sekilde tetiklenir

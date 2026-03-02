@@ -1,8 +1,8 @@
-# Tekton Runner: Kind + Tekton + Harbor + HTTP API (Git/Local/ZIP)
+# Tekton Runner: Kind + Tekton + Harbor + HTTP API (Git/ZIP)
 
 ## Proje Özeti
 
-Bu çalışma ile bir Kubernetes (kind) ortamında Tekton kuruldu ve Harbor registry ile entegre edildi. Bir HTTP servis (`tekton-runner`) sayesinde uygulama dışarıdan JSON göndererek build tetikleyebiliyor. Kaynak olarak GitHub/Azure DevOps (HTTPS token ile), yerel NFS/SMB mount ve ZIP indirip açma destekleniyor. Tekton Task, kaynak kodu alıp Kaniko ile image build ediyor ve Harbor’a pushluyor. Böylece webhook kullanmadan, dış sistemlerin JSON ile tetikleyebileceği esnek bir CI pipeline sağlanmış oluyor.
+Bu çalışma ile bir Kubernetes (kind) ortamında Tekton kuruldu ve Harbor registry ile entegre edildi. Bir HTTP servis (`tekton-runner`) sayesinde uygulama dışarıdan JSON göndererek build tetikleyebiliyor. Kaynak olarak GitHub/Azure DevOps (HTTPS token ile) ve ZIP indirip açma destekleniyor. Tekton Task, kaynak kodu alıp Kaniko ile image build ediyor ve Harbor’a pushluyor. Böylece webhook kullanmadan, dış sistemlerin JSON ile tetikleyebileceği esnek bir CI pipeline sağlanmış oluyor.
 
 ---
 
@@ -97,7 +97,7 @@ sudo docker push lenovo:8443/library/python:3.12-alpine
 
 ---
 
-## 7) Tekton Build Task (Git/Local/ZIP)
+## 7) Tekton Build Task (Git/ZIP)
 
 Manifest:
 ```
@@ -111,7 +111,6 @@ kubectl apply -f /home/beko/manifests/tekton-generic-build.yaml
 
 Bu Task:
 - Git repo clone
-- Local NFS/SMB mount
 - ZIP indirip açma
 - Kaniko ile build + Harbor push
 
@@ -160,14 +159,20 @@ Not (2026-02-16):
 - Yeni workspace node olusumunda `lenovo` host mapping + containerd `hosts.toml` otomatik yazilir.
 - Yeni pod olusumundan hemen sonra kisa sureli `metrics not available yet` gorulebilir.
 - Quick Actions:
-  - `Git Sample / ZIP Sample / Local Sample` popup acarak JSON gosterir.
+  - `Git Sample / ZIP Sample` popup acarak JSON gosterir.
   - Popup icinden `Copy JSON` ve `Fill Form` kullanilabilir.
   - Git sample icinde `git_username` ve `git_token` placeholder alanlari bulunur.
 
 Not (2026-02-23):
-- ZIP Build ve Local Build formlarinda da dependency secimi vardir (`none|redis|sql|both`).
-- ZIP/Local formlarinda SQL dependency secilirse `SQL Database` ve `SQL Password` zorunludur.
-- `POST /run` icin dependency orchestration (`redis/sql/both`) `git|zip|local` kaynak tiplerinin tumunda calisir.
+- ZIP Build formunda dependency secimi vardir (`none|redis|sql|both`).
+- ZIP formunda SQL dependency secilirse `SQL Database` ve `SQL Password` zorunludur.
+- `POST /run` icin dependency orchestration (`redis/sql/both`) `git|zip` kaynak tiplerinde calisir.
+
+Not (2026-03-02):
+- Farkli runtime'lar icin ortak dependency env'leri uretilir: `DATABASE_URL`, `REDIS_URL`, `DB_*`, `REDIS_*` ve `.NET` icin `ConnectionStrings__*`.
+- Multi-app deploy'da her `apps[]` girdisi icin `container_port` zorunludur.
+- Deploy sonrasi pod loglari taranir; uygulama logu baska bir portta dinledigini yaziyorsa run `deploy failed` olur.
+- `backend` isimli sibling app varsa UI/frontend app'lere `BACKEND_BASE_URL`, `BACKEND_URL`, `API_BASE_URL`, `VITE_API_BASE_URL`, `NEXT_PUBLIC_API_URL` otomatik eklenir.
 
 ---
 
@@ -200,50 +205,6 @@ Bu RBAC ile:
   },
   "image": {
     "project": "dev",
-    "tag": "latest",
-    "registry": "lenovo:8443"
-  }
-}
-```
-
-### Local NFS
-
-```json
-{
-  "source": {
-    "type": "local",
-    "local_path": "projeler/myapp",
-    "nfs": {
-      "server": "10.0.0.10",
-      "path": "/exports/projects",
-      "size": "50Gi"
-    }
-  },
-  "image": {
-    "project": "myapp",
-    "tag": "latest",
-    "registry": "lenovo:8443"
-  }
-}
-```
-
-### Local SMB
-
-```json
-{
-  "source": {
-    "type": "local",
-    "local_path": "projeler/myapp",
-    "smb": {
-      "server": "fileserver.local",
-      "share": "projects",
-      "username": "SMB_USER",
-      "password": "SMB_PASS",
-      "size": "50Gi"
-    }
-  },
-  "image": {
-    "project": "myapp",
     "tag": "latest",
     "registry": "lenovo:8443"
   }
@@ -468,7 +429,7 @@ Bu limitler dusuk kaynakli hostlarda SQL'in asiri bellek tuketimini sinirlamak i
 
 ## 21) 2026-02-23 Degisiklik Ozeti
 
-- ZIP Build ve Local Build UI formlarina dependency secimi eklendi (`none|redis|sql|both`).
-- ZIP/Local formlarinda SQL icin zorunlu alan kontrolu eklendi (`database`, `password`).
-- ZIP/Local sample JSON'larina dependency ornekleri eklendi.
-- CLI `-apply` akisinda deploy/dependency orchestration `git|zip|local` kaynak tiplerinin hepsi icin calisir.
+- ZIP Build UI formuna dependency secimi eklendi (`none|redis|sql|both`).
+- ZIP formunda SQL icin zorunlu alan kontrolu eklendi (`database`, `password`).
+- ZIP sample JSON'larina dependency ornekleri eklendi.
+- CLI `-apply` akisinda deploy/dependency orchestration `git|zip` kaynak tiplerinde calisir.
