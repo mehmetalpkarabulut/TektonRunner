@@ -1002,6 +1002,8 @@ function buildGitPayload() {
   };
   const storage = buildSharedStoragePayload("git");
   if (storage) payload.file_storage = storage;
+  const extraEnv = parseExtraEnv("git");
+  if (extraEnv.length > 0) payload.extra_env = extraEnv;
 
   if (depType !== "none") {
     payload.dependency = { type: depType };
@@ -1082,6 +1084,31 @@ function buildSharedStoragePayload(prefix) {
     pvc_name: document.getElementById(`${prefix}StoragePvc`)?.value.trim() || "shared-file-pvc",
     mount_path: document.getElementById(`${prefix}StorageMount`)?.value.trim() || "/app/storage"
   };
+}
+
+function parseExtraEnv(prefix) {
+  const raw = document.getElementById(`${prefix}ExtraEnv`)?.value.trim() || "";
+  if (!raw) {
+    return [];
+  }
+  return raw
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line, index) => {
+      const eq = line.indexOf("=");
+      if (eq <= 0) {
+        throw new Error(`Extra Environment Variables satir ${index + 1} gecersiz. Format KEY=value olmali.`);
+      }
+      return { name: line.slice(0, eq).trim(), value: line.slice(eq + 1).trim() };
+    });
+}
+
+function formatExtraEnv(extraEnv) {
+  if (!Array.isArray(extraEnv) || extraEnv.length === 0) {
+    return "";
+  }
+  return extraEnv.map((entry) => `${entry.name || ""}=${entry.value || ""}`).join("\n");
 }
 
 function updateStorageVisibility(prefix) {
@@ -1200,6 +1227,8 @@ function buildZipPayload() {
   };
   const storage = buildSharedStoragePayload("zip");
   if (storage) payload.file_storage = storage;
+  const extraEnv = parseExtraEnv("zip");
+  if (extraEnv.length > 0) payload.extra_env = extraEnv;
   if (port > 0) {
     payload.deploy.container_port = port;
   }
@@ -1219,6 +1248,7 @@ function fillGitForm(sample) {
   document.getElementById("gitImageProject").value = sample.image.project;
   document.getElementById("gitImageTag").value = sample.image.tag;
   document.getElementById("gitRegistry").value = sample.image.registry;
+  document.getElementById("gitExtraEnv").value = formatExtraEnv(sample.extra_env);
   document.getElementById("gitPort").value = sample.deploy.container_port;
   const depType = sample.dependency?.type || "none";
   document.getElementById("gitDepType").value = depType;
@@ -1252,6 +1282,7 @@ function fillZipForm(sample) {
   document.getElementById("zipImageProject").value = sample.image.project || "";
   document.getElementById("zipImageTag").value = sample.image.tag;
   document.getElementById("zipRegistry").value = sample.image.registry;
+  document.getElementById("zipExtraEnv").value = formatExtraEnv(sample.extra_env);
   document.getElementById("zipPort").value = sample.deploy?.container_port || "";
   const depType = sample.dependency?.type || "none";
   document.getElementById("zipDepType").value = depType;
@@ -1383,7 +1414,10 @@ const sampleGit = {
     enabled: true,
     pvc_name: "shared-file-pvc",
     mount_path: "/app/storage"
-  }
+  },
+  extra_env: [
+    { name: "JWT_SECRET", value: "super-secret" }
+  ]
 };
 
 const sampleZip = {
@@ -1421,7 +1455,10 @@ const sampleZip = {
     enabled: true,
     pvc_name: "shared-file-pvc",
     mount_path: "/app/storage"
-  }
+  },
+  extra_env: [
+    { name: "JWT_SECRET", value: "super-secret" }
+  ]
 };
 
 document.getElementById("sampleGit").onclick = () => showSampleModal("Git Sample JSON", sampleGit, fillGitForm);

@@ -39,6 +39,12 @@ type Input struct {
 	FileStorage FileStorage `json:"file_storage"`
 	Dependency  Dependency  `json:"dependency"`
 	Migration   Migration   `json:"migration"`
+	ExtraEnv    []EnvVar    `json:"extra_env"`
+}
+
+type EnvVar struct {
+	Name  string `json:"name"`
+	Value string `json:"value"`
 }
 
 type AppSpec struct {
@@ -2456,6 +2462,9 @@ func handleZipDeploy(in Input, targets []AppTarget, taskRuns map[string]string, 
 		}
 		appEnvRefs := append([]AppEnvSecretRef{}, envRefs...)
 		appEnvRefs = appendEnvValue(appEnvRefs, "PORT", strconv.Itoa(t.ContainerPort))
+		for _, env := range in.ExtraEnv {
+			appEnvRefs = appendEnvValue(appEnvRefs, env.Name, env.Value)
+		}
 		if backendServiceURL != "" && t.AppName != "backend" {
 			appEnvRefs = appendEnvValue(appEnvRefs, "BACKEND_BASE_URL", backendServiceURL)
 			appEnvRefs = appendEnvValue(appEnvRefs, "BACKEND_URL", backendServiceURL)
@@ -5310,6 +5319,11 @@ func validate(in *Input) error {
 		}
 		if len(in.Migration.Command) == 0 && len(in.Migration.Args) > 0 {
 			return fmt.Errorf("migration.args requires migration.command when migration.enabled=true")
+		}
+	}
+	for i, env := range in.ExtraEnv {
+		if strings.TrimSpace(env.Name) == "" {
+			return fmt.Errorf("extra_env[%d].name is required", i)
 		}
 	}
 	return nil

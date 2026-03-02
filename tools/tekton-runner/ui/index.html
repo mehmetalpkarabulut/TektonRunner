@@ -106,6 +106,7 @@
               <div class="form-field"><label>Image Project</label><input id="gitImageProject" placeholder="app_name kullanilir" /></div>
               <div class="form-field"><label>Image Tag</label><input id="gitImageTag" value="latest" /></div>
               <div class="form-field"><label>Registry</label><input id="gitRegistry" value="lenovo:8443" /></div>
+              <div class="form-field"><label>Extra Environment Variables</label><textarea id="gitExtraEnv" rows="5" placeholder="JWT_SECRET=super-secret"></textarea></div>
               <div class="form-field"><label>Redis Image</label><input id="gitRedisImage" value="lenovo:8443/library/redis:7-alpine" /></div>
               <div class="form-field"><label>Redis Service</label><input id="gitRedisService" value="redis" /></div>
               <div class="form-field"><label>Redis Port</label><input id="gitRedisPort" type="number" min="1" value="6379" /></div>
@@ -170,6 +171,7 @@
               <div class="form-field"><label>Image Project</label><input id="zipImageProject" placeholder="app_name kullanilir" /></div>
               <div class="form-field"><label>Image Tag</label><input id="zipImageTag" value="latest" /></div>
               <div class="form-field"><label>Registry</label><input id="zipRegistry" value="lenovo:8443" /></div>
+              <div class="form-field"><label>Extra Environment Variables</label><textarea id="zipExtraEnv" rows="5" placeholder="JWT_SECRET=super-secret"></textarea></div>
               <div class="form-field" id="zipStoragePvcWrap"><label>Storage PVC Name</label><input id="zipStoragePvc" value="shared-file-pvc" /></div>
               <div class="form-field" id="zipStorageMountWrap"><label>Storage Mount Path</label><input id="zipStorageMount" value="/app/storage" /></div>
               <div class="form-field"><label>Redis Image</label><input id="zipRedisImage" value="lenovo:8443/library/redis:7-alpine" /></div>
