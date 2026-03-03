@@ -4,7 +4,9 @@ Bu dokuman, yeni bir makinede bu repo ile Harbor + Tekton + tekton-runner ortami
 
 ## 1) Hedef Mimari
 
-- Host: Linux
+- Calisma ortami: Ubuntu VM
+- VM host'u: Windows Server
+- Ag modeli: VM NAT arkasinda olabilir. Codex genelde sadece Ubuntu VM icinde islem yapabilir; Windows host firewall/NAT/port-forward ayarlari ayrica istenmelidir.
 - Harbor (Docker Compose):
   - UI: `https://lenovo:8443`
   - Registry: `lenovo:8443`
@@ -12,18 +14,22 @@ Bu dokuman, yeni bir makinede bu repo ile Harbor + Tekton + tekton-runner ortami
 - Tekton Task: `build-and-push-generic`
 - Runner API: `tekton-runner` (`:8088`)
 - Runner UI: `/ui/`
+- Zip upload servisi: `zip-server` (`:18080` veya cluster icinde `zip-server.tekton-pipelines.svc.cluster.local:8080`)
 
 ## 2) Repo Icerigi
 
 - Runner kodu: `tools/tekton-runner`
 - Tekton task/manifests: `manifests/`
 - Operasyon dokumanlari: `docs/`
+- Bootstrap giris noktasi: `AGENTS.md`
 
 ## 3) Onkosullar
 
 - `docker`, `kubectl`, `kind`, `curl`, `openssl`, `go`
 - Host'ta `lenovo` DNS/hosts cozumlemesi
 - Harbor sertifikasi: `/home/beko/harbor/certs/harbor.crt` ve `/home/beko/harbor/certs/harbor.key`
+- Ubuntu VM ic IP'sini runtime'da tespit et (`ip -br a`)
+- Windows host uzerinde acilacak portlar son adimda ayri raporlanmali
 
 ## 4) Harbor Kurulumu
 
@@ -43,6 +49,12 @@ Varsayilan login:
 
 - user: `admin`
 - pass: `Harbor12345`
+
+Not:
+
+- Runner image'leri Harbor'a workspace bazli project altina yazar.
+- Ornek: workspace `ws-python3` ise Harbor project `python3` olur.
+- App repo adlari ayri kalir. Ornek image: `lenovo:8443/python3/backend:latest`
 
 ## 5) Kind + Tekton Kurulumu
 
@@ -120,6 +132,11 @@ curl -i http://127.0.0.1:8088/healthz
 curl -i http://127.0.0.1:8088/ui/
 ```
 
+Not:
+
+- Servis tek instance calismalidir. `:8088 bind: address already in use` gorulurse duplicate process temizlenmelidir.
+- Bu repoda systemd override ile eski/orphan `tekton-runner` process temizligi yapilmis olabilir; servis dosyasini da bu mantikla tasiyin.
+
 ## 9) API Ozeti
 
 - `POST /run`
@@ -136,7 +153,6 @@ curl -i http://127.0.0.1:8088/ui/
 
 - `git`
 - `zip`
-- `local`
 
 `dependency.type`:
 
@@ -147,14 +163,33 @@ curl -i http://127.0.0.1:8088/ui/
 
 `migration.enabled=true` sadece `dependency.type=sql|both` ile kullanilir.
 
+Ek davranislar:
+
+- `extra_env` ile uygulamaya ozel env girilebilir. UI'da bu alan `Extra Environment Variables` olarak gorunur ve format `KEY=value` satirlaridir.
+- `file_storage.enabled=true` ise ortak RWX storage mount edilir.
+- NFS/SMB backend verilirse PV+PVC otomatik olusturulur.
+- Storage backend verilmezse varsayilan olarak `10.134.70.112:/srv/nfs/shared` ve `1Gi` kullanilir.
+- Storage alt klasoru otomatik olusur:
+  - tek app: workspace adinin `ws-` siz hali
+  - multi-app: `<workspace>/<app>`
+- Runner `DATABASE_URL`, `REDIS_URL`, `DB_*`, `REDIS_*` ve `.NET` icin `ConnectionStrings__*` env'lerini uretebilir.
+
 ## 11) UI Durumu
 
-UI'da `Git Build`, `ZIP Build`, `Local Build` bolumleri ayni capability setine sahiptir:
+UI'da `Git Build` ve `ZIP Build` bolumleri vardir:
 
 - dependency secimi (`none|redis|sql|both`)
 - SQL zorunlu alanlari (`database`, `password`)
 - migration alanlari
 - advanced override alanlari (image/service/port/env)
+- `Shared Storage` secenegi
+- `Extra Environment Variables`
+
+Not:
+
+- `Local Build` artik yoktur.
+- ZIP ve multi-app akisinda `container_port` bos birakilabilir; runner once Dockerfile `EXPOSE` degerini kullanmaya calisir.
+- Deploy sonrasi pod loglari taranir. Bildirilen listening port ile deploy portu uyusmazsa run `failed` olur.
 
 ## 12) En Sik Sorunlar
 
@@ -180,6 +215,7 @@ sudo docker exec "$NODE" sh -lc 'grep -q "config_path = \"/etc/containerd/certs.
 
 - Runner endpoint'i host-local olabilir (`127.0.0.1:<port>`). Dis erisim icin `external-map` portunu kullan.
 - Ornek: `http://<HOST_IP>:18739`
+- UI pod `Running` olsa bile uygulama farkli portta dinliyorsa deploy sonrasi runtime port mismatch gorulebilir. Bu durumda Dockerfile `EXPOSE` ve uygulama gercek listening portu kontrol edilmelidir.
 
 ### C) `/deps` SQL login hatasi
 
@@ -191,6 +227,16 @@ sudo docker exec "$NODE" sh -lc 'grep -q "config_path = \"/etc/containerd/certs.
 - Uygulama baslasa bile HTTP cevap vermeyebilir.
 - `dependency.type=redis|both` ile deploy et veya workspace'e Redis service/deployment ekle.
 
+### E) Uygulama env eksigi ile coker
+
+- Bazi uygulamalar `JWT_SECRET` gibi app-ozel env ister.
+- Bu tip degerler UI/API uzerinden `extra_env` ile verilmelidir.
+
+### F) Shared storage acik ama PVC yok
+
+- `Shared Storage` aciksa ama mevcut PVC bulunamazsa deploy durur.
+- Varsayilan NFS backend kullaniliyorsa `10.134.70.112:/srv/nfs/shared` erisilebilir olmalidir.
+
 ## 13) Operasyon Komutlari
 
 ```bash
@@ -201,7 +247,24 @@ curl -sS "http://127.0.0.1:8088/workspace/status?workspace=ws-<workspace>"
 curl -sS "http://127.0.0.1:8088/external-map"
 ```
 
-## 14) Git Akisi (Zorunlu)
+## 14) Windows Host Cikis Listesi
+
+Kurulum VM icinde tamamlansa bile asagidaki portlar icin Windows host tarafinda NAT/port-forward/firewall acilmasi gerekebilir:
+
+- Harbor UI / registry: `8443`
+- tekton-runner API/UI: `8088`
+- zip-server: `18080`
+- Deploy edilen uygulamalar icin `external-map` ciktisindaki host portlari
+
+Teslimatta su tablo mutlaka verilmelidir:
+
+- servis adi
+- VM ic IP
+- VM ic port
+- hostta acilacak dis port
+- test URL
+
+## 15) Git Akisi (Zorunlu)
 
 Her degisiklikten sonra:
 
@@ -219,7 +282,7 @@ git revert <commit>
 git push origin main
 ```
 
-## 15) Guvenlik Notu
+## 16) Guvenlik Notu
 
 Bu runbook test ortam varsayimlari icerir (or. `skip_verify=true`, sabit sifreler). Uretimde:
 
