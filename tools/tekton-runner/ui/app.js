@@ -1079,11 +1079,22 @@ function buildSharedStoragePayload(prefix) {
   if (!enabled) {
     return null;
   }
-  return {
+  const payload = {
     enabled: true,
     pvc_name: document.getElementById(`${prefix}StoragePvc`)?.value.trim() || "shared-file-pvc",
     mount_path: document.getElementById(`${prefix}StorageMount`)?.value.trim() || "/app/storage"
   };
+  const nfsServer = document.getElementById(`${prefix}StorageNfsServer`)?.value.trim() || "";
+  const nfsPath = document.getElementById(`${prefix}StorageNfsPath`)?.value.trim() || "";
+  const nfsSize = document.getElementById(`${prefix}StorageNfsSize`)?.value.trim() || "1Gi";
+  if (nfsServer && nfsPath) {
+    payload.nfs = {
+      server: nfsServer,
+      path: nfsPath,
+      size: nfsSize
+    };
+  }
+  return payload;
 }
 
 function parseExtraEnv(prefix) {
@@ -1115,8 +1126,14 @@ function updateStorageVisibility(prefix) {
   const enabled = document.getElementById(`${prefix}StorageEnabled`)?.value === "true";
   const pvcWrap = document.getElementById(`${prefix}StoragePvcWrap`);
   const mountWrap = document.getElementById(`${prefix}StorageMountWrap`);
+  const nfsServerWrap = document.getElementById(`${prefix}StorageNfsServerWrap`);
+  const nfsPathWrap = document.getElementById(`${prefix}StorageNfsPathWrap`);
+  const nfsSizeWrap = document.getElementById(`${prefix}StorageNfsSizeWrap`);
   if (pvcWrap) pvcWrap.style.display = enabled ? "" : "none";
   if (mountWrap) mountWrap.style.display = enabled ? "" : "none";
+  if (nfsServerWrap) nfsServerWrap.style.display = enabled ? "" : "none";
+  if (nfsPathWrap) nfsPathWrap.style.display = enabled ? "" : "none";
+  if (nfsSizeWrap) nfsSizeWrap.style.display = enabled ? "" : "none";
 }
 
 function buildDependencyPayload(prefix) {
@@ -1271,6 +1288,9 @@ function fillGitForm(sample) {
   document.getElementById("gitStorageEnabled").value = sample.file_storage?.enabled ? "true" : "false";
   document.getElementById("gitStoragePvc").value = sample.file_storage?.pvc_name || "shared-file-pvc";
   document.getElementById("gitStorageMount").value = sample.file_storage?.mount_path || "/app/storage";
+  document.getElementById("gitStorageNfsServer").value = sample.file_storage?.nfs?.server || "";
+  document.getElementById("gitStorageNfsPath").value = sample.file_storage?.nfs?.path || "";
+  document.getElementById("gitStorageNfsSize").value = sample.file_storage?.nfs?.size || "1Gi";
   updateGitDependencyVisibility();
   updateStorageVisibility("git");
 }
@@ -1305,6 +1325,9 @@ function fillZipForm(sample) {
   document.getElementById("zipStorageEnabled").value = sample.file_storage?.enabled ? "true" : "false";
   document.getElementById("zipStoragePvc").value = sample.file_storage?.pvc_name || "shared-file-pvc";
   document.getElementById("zipStorageMount").value = sample.file_storage?.mount_path || "/app/storage";
+  document.getElementById("zipStorageNfsServer").value = sample.file_storage?.nfs?.server || "";
+  document.getElementById("zipStorageNfsPath").value = sample.file_storage?.nfs?.path || "";
+  document.getElementById("zipStorageNfsSize").value = sample.file_storage?.nfs?.size || "1Gi";
   updateDependencyVisibility("zip");
   updateStorageVisibility("zip");
 }
@@ -1413,7 +1436,12 @@ const sampleGit = {
   file_storage: {
     enabled: true,
     pvc_name: "shared-file-pvc",
-    mount_path: "/app/storage"
+    mount_path: "/app/storage",
+    nfs: {
+      server: "10.134.70.112",
+      path: "/srv/nfs/shared",
+      size: "1Gi"
+    }
   },
   extra_env: [
     { name: "JWT_SECRET", value: "super-secret" }
@@ -1454,7 +1482,12 @@ const sampleZip = {
   file_storage: {
     enabled: true,
     pvc_name: "shared-file-pvc",
-    mount_path: "/app/storage"
+    mount_path: "/app/storage",
+    nfs: {
+      server: "10.134.70.112",
+      path: "/srv/nfs/shared",
+      size: "1Gi"
+    }
   },
   extra_env: [
     { name: "JWT_SECRET", value: "super-secret" }

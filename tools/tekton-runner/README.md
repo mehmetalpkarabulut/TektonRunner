@@ -54,11 +54,11 @@ cat request.json | ./tekton-runner
     "enabled": true,
     "pvc_name": "shared-file-pvc",
     "mount_path": "/app/storage",
-    "sub_path": "shared/ws-myapp/myapp",
+    "sub_path": "myapp",
     "nfs": {
       "server": "10.0.0.10",
       "path": "/exports/shared",
-      "size": "50Gi"
+      "size": "1Gi"
     }
   }
 }
@@ -72,8 +72,9 @@ cat request.json | ./tekton-runner
 - `image.project` ve `apps[].project` Harbor project adı degil, proje icindeki repo adidir. Bos ise app adi kullanilir.
 - NFS/SMB bilgisi verilirse PV+PVC (ve SMB secret) otomatik oluşturulur.
 - `file_storage.enabled=true` verilirse uygulama pod'una ortak RWX storage mount edilir.
-- `file_storage.sub_path` bos birakilirsa otomatik olarak `shared/<workspace>/<app>` olusturulur.
-- `file_storage.nfs` veya `file_storage.smb` verilirse workspace cluster icinde ilgili PVC otomatik olusturulur. Verilmezse `file_storage.pvc_name` zaten var olmalidir.
+- `file_storage.sub_path` bos birakilirsa runner NFS/SMB paylasimi altinda otomatik klasor olusturur. Tek app deploy'da varsayilan klasor workspace adinin `ws-` siz halidir; multi-app deploy'da `<workspace>/<app>` formatina duser.
+- `file_storage.nfs` veya `file_storage.smb` verilirse workspace cluster icinde ilgili PVC otomatik olusturulur.
+- `file_storage.enabled=true` ve storage backend bilgisi verilmezse varsayilan olarak `10.134.70.112:/srv/nfs/shared` ve `1Gi` kullanilir.
 
 ## SMB Notu
 

@@ -113,6 +113,9 @@
               <div class="form-field"><label>Redis Env Key</label><input id="gitRedisEnv" value="ConnectionStrings__Redis" /></div>
               <div class="form-field" id="gitStoragePvcWrap"><label>Storage PVC Name</label><input id="gitStoragePvc" value="shared-file-pvc" /></div>
               <div class="form-field" id="gitStorageMountWrap"><label>Storage Mount Path</label><input id="gitStorageMount" value="/app/storage" /></div>
+              <div class="form-field" id="gitStorageNfsServerWrap"><label>NFS Server</label><input id="gitStorageNfsServer" placeholder="10.134.70.112" /></div>
+              <div class="form-field" id="gitStorageNfsPathWrap"><label>NFS Path</label><input id="gitStorageNfsPath" placeholder="/srv/nfs/shared" /></div>
+              <div class="form-field" id="gitStorageNfsSizeWrap"><label>NFS Size</label><input id="gitStorageNfsSize" value="1Gi" /></div>
               <div class="form-field"><label>SQL Image</label><input id="gitSqlImage" value="lenovo:8443/library/postgres:16-alpine" /></div>
               <div class="form-field"><label>SQL Service</label><input id="gitSqlService" value="postgres" /></div>
               <div class="form-field"><label>SQL Port</label><input id="gitSqlPort" type="number" min="1" value="5432" /></div>
@@ -174,6 +177,9 @@
               <div class="form-field"><label>Extra Environment Variables</label><textarea id="zipExtraEnv" rows="5" placeholder="JWT_SECRET=super-secret"></textarea></div>
               <div class="form-field" id="zipStoragePvcWrap"><label>Storage PVC Name</label><input id="zipStoragePvc" value="shared-file-pvc" /></div>
               <div class="form-field" id="zipStorageMountWrap"><label>Storage Mount Path</label><input id="zipStorageMount" value="/app/storage" /></div>
+              <div class="form-field" id="zipStorageNfsServerWrap"><label>NFS Server</label><input id="zipStorageNfsServer" placeholder="10.134.70.112" /></div>
+              <div class="form-field" id="zipStorageNfsPathWrap"><label>NFS Path</label><input id="zipStorageNfsPath" placeholder="/srv/nfs/shared" /></div>
+              <div class="form-field" id="zipStorageNfsSizeWrap"><label>NFS Size</label><input id="zipStorageNfsSize" value="1Gi" /></div>
               <div class="form-field"><label>Redis Image</label><input id="zipRedisImage" value="lenovo:8443/library/redis:7-alpine" /></div>
               <div class="form-field"><label>Redis Service</label><input id="zipRedisService" value="redis" /></div>
               <div class="form-field"><label>Redis Port</label><input id="zipRedisPort" type="number" min="1" value="6379" /></div>

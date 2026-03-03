@@ -2796,7 +2796,18 @@ func resolveFileStorageSubPath(workspace, app, raw string) (string, error) {
 	} else if s != "" {
 		return s, nil
 	}
-	return path.Join("shared", sanitizeName(workspace), sanitizeName(app)), nil
+	project := sanitizeName(strings.TrimPrefix(strings.TrimSpace(workspace), "ws-"))
+	appName := sanitizeName(app)
+	if project == "" {
+		project = appName
+	}
+	if project == "" {
+		project = "app"
+	}
+	if appName == "" || appName == project {
+		return project, nil
+	}
+	return path.Join(project, appName), nil
 }
 
 func ensureFileStorageSubPath(kubeconfig, namespace, pvcName, subPath string) error {
@@ -5177,8 +5188,15 @@ func setDefaults(in *Input) {
 		if strings.TrimSpace(in.FileStorage.MountPath) == "" {
 			in.FileStorage.MountPath = "/app/storage"
 		}
+		if in.FileStorage.NFS == nil && in.FileStorage.SMB == nil {
+			in.FileStorage.NFS = &NFSConfig{
+				Server: "10.134.70.112",
+				Path:   "/srv/nfs/shared",
+				Size:   "1Gi",
+			}
+		}
 		if in.FileStorage.NFS != nil && in.FileStorage.NFS.Size == "" {
-			in.FileStorage.NFS.Size = "50Gi"
+			in.FileStorage.NFS.Size = "1Gi"
 		}
 		if in.FileStorage.SMB != nil && in.FileStorage.SMB.Size == "" {
 			in.FileStorage.SMB.Size = "50Gi"
