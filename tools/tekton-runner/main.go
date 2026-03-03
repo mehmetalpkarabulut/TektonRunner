@@ -730,6 +730,49 @@ func runServer(addr, apiKey string) {
 		_ = json.NewEncoder(w).Encode(resp)
 	})
 
+	http.HandleFunc("/zip/delete", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodDelete && r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		if apiKey != "" {
+			auth := r.Header.Get("Authorization")
+			if auth != "Bearer "+apiKey {
+				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				return
+			}
+		}
+
+		filenameInput := strings.TrimSpace(r.URL.Query().Get("filename"))
+		if filenameInput == "" {
+			filenameInput = strings.TrimSpace(r.FormValue("filename"))
+		}
+		filename, err := sanitizeZipFilename(filenameInput)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		pod, err := getRunningZipServerPod()
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if err := kubectlExecInPod(zipServerNamespace, pod, "rm", "-f", "/srv/"+filename); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		resp := map[string]any{
+			"status":   "deleted",
+			"filename": filename,
+			"pod":      pod,
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(resp)
+	})
+
 	http.HandleFunc("/run", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -1560,6 +1603,7 @@ func runServer(addr, apiKey string) {
 	for _, p := range []string{
 		"/healthz",
 		"/zip/upload",
+		"/zip/delete",
 		"/run",
 		"/endpoint",
 		"/workspaces",
@@ -3753,6 +3797,45 @@ func openAPISpec() string {
           "400": { "description": "Invalid request" },
           "401": { "description": "Unauthorized" },
           "500": { "description": "Upload failed" }
+        }
+      }
+    },
+    "/zip/delete": {
+      "delete": {
+        "summary": "Delete a zip file from zip-server (/srv)",
+        "parameters": [
+          { "name": "filename", "in": "query", "required": true, "schema": { "type": "string" }, "description": "Zip filename to delete" }
+        ],
+        "responses": {
+          "200": { "description": "Deleted" },
+          "400": { "description": "Invalid request" },
+          "401": { "description": "Unauthorized" },
+          "500": { "description": "Delete failed" }
+        }
+      },
+      "post": {
+        "summary": "Delete a zip file from zip-server (/srv) using form/query filename",
+        "parameters": [
+          { "name": "filename", "in": "query", "required": false, "schema": { "type": "string" } }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/x-www-form-urlencoded": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "filename": { "type": "string" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Deleted" },
+          "400": { "description": "Invalid request" },
+          "401": { "description": "Unauthorized" },
+          "500": { "description": "Delete failed" }
         }
       }
     },

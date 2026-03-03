@@ -104,6 +104,7 @@ API key ile:
 
 - `GET /healthz` -> `ok`
 - `POST /zip/upload` -> multipart ile zip yukler, `zip-server:/srv/<file>.zip` olarak kaydeder
+- `DELETE /zip/delete?filename=<file>.zip` -> `zip-server:/srv/<file>.zip` dosyasini siler
 - `POST /run` -> JSON alır, manifestleri apply eder
 - `POST /run?dry_run=true` -> YAML döner
 - `GET /run/logs?workspace=ws-...&app=...` -> build+deploy timeline loglari (JSON)
@@ -160,6 +161,23 @@ curl -sS -X POST "http://<host>:8088/zip/upload" \
   -H "Authorization: Bearer YOUR_KEY" \
   -F "file=@/home/beko/myproject.zip" \
   -F "filename=demo-v2.zip"
+```
+
+### Zip Delete Ornegi
+
+Yuklenen zip dosyasini silmek icin:
+
+```bash
+curl -sS -X DELETE "http://<host>:8088/zip/delete?filename=demo-v2.zip" \
+  -H "Authorization: Bearer YOUR_KEY"
+```
+
+Alternatif olarak `POST` ile de cagrilabilir:
+
+```bash
+curl -sS -X POST "http://<host>:8088/zip/delete" \
+  -H "Authorization: Bearer YOUR_KEY" \
+  -d "filename=demo-v2.zip"
 ```
 
 ### Multi-App (tek run, birden fazla pod)
