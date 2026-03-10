@@ -164,6 +164,36 @@ Kullanici ek placeholder verebilir:
 
 Runner `appsettings*.json` icindeki string alanlari tarar, placeholder replace eder ve degisen key-path'leri Kubernetes env olarak inject eder.
 
+### 8.2 Uygulama ve UI Ornekleri
+
+Appsettings icinde placeholder girisi:
+
+```json
+{
+  "ConnectionStrings": {
+    "DefaultConnection": "{default_db}",
+    "Redis": "{default_redis_url}",
+    "MasterDataConnection": "{Mehmet}"
+  },
+  "FeatureFlags": {
+    "TenantCode": "{TenantCode}"
+  }
+}
+```
+
+UI `Placeholder Replacements` alanina giris formati:
+
+```text
+{Mehmet}=Host=postgres.ws-demo.svc.cluster.local;Port=5432;Database=MasterDb;Username=postgres;Password=StrongPass_123!;SSL Mode=Disable;
+{TenantCode}=TR01
+```
+
+Format kurali:
+- Her satir `{Key}=value` seklindedir.
+- Sol taraf mutlaka `{}` ile yazilmalidir.
+- DB icin standart token: `{default_db}`
+- Redis URL icin standart token: `{default_redis_url}`
+
 ## 9. Appsettings Tarama Mantigi
 
 Runner kaynak kodu (`git` veya `zip`) indirir, `appsettings*.json` dosyalarinda `ConnectionStrings` keylerini tarar ve uygun env maplerini olusturur.
