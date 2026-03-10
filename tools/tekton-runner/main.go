@@ -28,18 +28,19 @@ import (
 )
 
 type Input struct {
-	Namespace   string      `json:"namespace"`
-	Task        string      `json:"task"`
-	AppName     string      `json:"app_name"`
-	Apps        []AppSpec   `json:"apps"`
-	Workspace   string      `json:"workspace"`
-	Deploy      Deploy      `json:"deploy"`
-	Source      Source      `json:"source"`
-	Image       Image       `json:"image"`
-	FileStorage FileStorage `json:"file_storage"`
-	Dependency  Dependency  `json:"dependency"`
-	Migration   Migration   `json:"migration"`
-	ExtraEnv    []EnvVar    `json:"extra_env"`
+	Namespace      string      `json:"namespace"`
+	Task           string      `json:"task"`
+	AppName        string      `json:"app_name"`
+	Apps           []AppSpec   `json:"apps"`
+	RuntimeProfile string      `json:"runtime_profile"`
+	Workspace      string      `json:"workspace"`
+	Deploy         Deploy      `json:"deploy"`
+	Source         Source      `json:"source"`
+	Image          Image       `json:"image"`
+	FileStorage    FileStorage `json:"file_storage"`
+	Dependency     Dependency  `json:"dependency"`
+	Migration      Migration   `json:"migration"`
+	ExtraEnv       []EnvVar    `json:"extra_env"`
 }
 
 type EnvVar struct {
@@ -48,11 +49,12 @@ type EnvVar struct {
 }
 
 type AppSpec struct {
-	AppName       string `json:"app_name"`
-	Project       string `json:"project"`
-	Tag           string `json:"tag"`
-	ContainerPort int    `json:"container_port"`
-	ContextSubDir string `json:"context_sub_path"`
+	AppName        string `json:"app_name"`
+	Project        string `json:"project"`
+	Tag            string `json:"tag"`
+	ContainerPort  int    `json:"container_port"`
+	ContextSubDir  string `json:"context_sub_path"`
+	RuntimeProfile string `json:"runtime_profile"`
 }
 
 type Source struct {
@@ -201,6 +203,103 @@ func appendEnvValue(refs []AppEnvSecretRef, envName, value string) []AppEnvSecre
 	})
 }
 
+func upsertEnvValue(refs []AppEnvSecretRef, envName, value string) []AppEnvSecretRef {
+	envName = strings.TrimSpace(envName)
+	value = strings.TrimSpace(value)
+	if envName == "" || value == "" {
+		return refs
+	}
+	for i := range refs {
+		if refs[i].EnvName == envName {
+			refs[i].SecretName = ""
+			refs[i].SecretKey = ""
+			refs[i].Value = value
+			return refs
+		}
+	}
+	return append(refs, AppEnvSecretRef{
+		EnvName: envName,
+		Value:   value,
+	})
+}
+
+func isConnectionEnvName(envName string) bool {
+	name := strings.TrimSpace(envName)
+	if strings.HasPrefix(name, "ConnectionStrings__") {
+		return true
+	}
+	switch strings.ToUpper(name) {
+	case "DATABASE_URL", "SQL_CONNECTION_STRING", "DEFAULT_CONNECTION", "REDIS_URL", "REDIS_CONNECTION", "REDIS_CONNECTION_STRING":
+		return true
+	default:
+		return false
+	}
+}
+
+func normalizeRuntimeProfile(raw string) string {
+	p := strings.ToLower(strings.TrimSpace(raw))
+	switch p {
+	case "", "default":
+		return "auto"
+	case "auto", "dotnet", "node", "python", "go", "java", "custom":
+		return p
+	default:
+		return p
+	}
+}
+
+func validateRuntimeProfile(raw, field string) error {
+	p := normalizeRuntimeProfile(raw)
+	switch p {
+	case "auto", "dotnet", "node", "python", "go", "java", "custom":
+		return nil
+	default:
+		return fmt.Errorf("%s must be one of: auto, dotnet, node, python, go, java, custom", field)
+	}
+}
+
+func runtimeProfileForApp(in Input, appName string) string {
+	profile := in.RuntimeProfile
+	if len(in.Apps) > 0 {
+		for _, a := range in.Apps {
+			if sanitizeName(a.AppName) != appName {
+				continue
+			}
+			if strings.TrimSpace(a.RuntimeProfile) != "" {
+				profile = a.RuntimeProfile
+			}
+			break
+		}
+	}
+	return normalizeRuntimeProfile(profile)
+}
+
+func profileConnectionEnvRefs(profile, depType, secretName string) []AppEnvSecretRef {
+	profile = normalizeRuntimeProfile(profile)
+	depType = strings.ToLower(strings.TrimSpace(depType))
+	if profile == "auto" || profile == "custom" {
+		return nil
+	}
+	refs := make([]AppEnvSecretRef, 0, 4)
+	switch profile {
+	case "dotnet":
+		if depType == "sql" || depType == "both" {
+			refs = appendEnvRef(refs, "ConnectionStrings__DefaultConnection", secretName, "sql-conn")
+		}
+		if depType == "redis" || depType == "both" {
+			refs = appendEnvRef(refs, "ConnectionStrings__Redis", secretName, "redis-conn")
+		}
+	case "node", "python", "go", "java":
+		if depType == "sql" || depType == "both" {
+			refs = appendEnvRef(refs, "DATABASE_URL", secretName, "database-url")
+		}
+		if depType == "redis" || depType == "both" {
+			refs = appendEnvRef(refs, "REDIS_URL", secretName, "redis-url")
+		}
+	}
+	return refs
+}
+
 func redisSecretData(host string, port int) map[string]string {
 	conn := fmt.Sprintf("%s:%d", host, port)
 	return map[string]string{
@@ -237,7 +336,12 @@ func defaultRedisEnvRefs(secretName string, cfg RedisDependency) []AppEnvSecretR
 
 func defaultSQLEnvRefs(secretName string, cfg SQLDependency) []AppEnvSecretRef {
 	refs := make([]AppEnvSecretRef, 0, 10)
-	refs = appendEnvRef(refs, "DATABASE_URL", secretName, "database-url")
+	isDotNetProfile := strings.HasPrefix(strings.TrimSpace(cfg.ConnectionEnv), "ConnectionStrings__") ||
+		strings.EqualFold(strings.TrimSpace(cfg.ConnectionEnv), "SQL_CONNECTION_STRING") ||
+		strings.EqualFold(strings.TrimSpace(cfg.ConnectionEnv), "DEFAULT_CONNECTION")
+	if !isDotNetProfile {
+		refs = appendEnvRef(refs, "DATABASE_URL", secretName, "database-url")
+	}
 	refs = appendEnvRef(refs, "DB_HOST", secretName, "db-host")
 	refs = appendEnvRef(refs, "DB_PORT", secretName, "db-port")
 	refs = appendEnvRef(refs, "DB_NAME", secretName, "db-name")
@@ -506,6 +610,57 @@ func deriveApp(in Input) string {
 
 func nextRunID() string {
 	return time.Now().UTC().Format("20060102T150405Z") + "-" + randSuffix()
+}
+
+type extractedBuildError struct {
+	TaskRun string
+	Line    string
+}
+
+func extractBuildErrors(taskrunLogs []TaskRunLogBlock, limit int) []extractedBuildError {
+	if limit <= 0 {
+		limit = 20
+	}
+	out := make([]extractedBuildError, 0, limit)
+	seen := map[string]bool{}
+	for _, tr := range taskrunLogs {
+		lines := strings.Split(tr.Logs, "\n")
+		for _, raw := range lines {
+			line := strings.TrimSpace(stripANSICodes(raw))
+			if line == "" {
+				continue
+			}
+			lower := strings.ToLower(line)
+			if !strings.Contains(lower, ": error ") &&
+				!strings.Contains(lower, ": warning ") &&
+				!strings.Contains(lower, "error building image:") &&
+				!strings.Contains(lower, "exception") &&
+				!strings.Contains(lower, "panic:") &&
+				!strings.Contains(lower, "traceback") &&
+				!strings.Contains(lower, "validationerror") &&
+				!strings.Contains(lower, "module not found") {
+				continue
+			}
+			key := tr.TaskRun + "\n" + line
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			out = append(out, extractedBuildError{
+				TaskRun: tr.TaskRun,
+				Line:    line,
+			})
+			if len(out) >= limit {
+				return out
+			}
+		}
+	}
+	return out
+}
+
+func stripANSICodes(s string) string {
+	ansiRe := regexp.MustCompile(`\x1b\[[0-9;]*[A-Za-z]`)
+	return ansiRe.ReplaceAllString(s, "")
 }
 
 func emitRunEvent(runID, workspace, app, stage, status, msg string, meta map[string]string) {
@@ -1041,6 +1196,20 @@ func runServer(addr, apiKey string) {
 		w.Write(info)
 	})
 
+	http.HandleFunc("/taskrun/all", func(w http.ResponseWriter, r *http.Request) {
+		ns := r.URL.Query().Get("namespace")
+		if ns == "" {
+			ns = "tekton-pipelines"
+		}
+		info, err := getAllTaskRuns(ns)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(info)
+	})
+
 	http.HandleFunc("/taskrun/logs", func(w http.ResponseWriter, r *http.Request) {
 		name := r.URL.Query().Get("name")
 		ns := r.URL.Query().Get("namespace")
@@ -1265,6 +1434,13 @@ func runServer(addr, apiKey string) {
 					}
 				}
 			}
+			buildErrors := extractBuildErrors(taskrunLogs, 24)
+			if len(buildErrors) > 0 {
+				writeTextLogSection(&b, "Build Errors")
+				for _, item := range buildErrors {
+					fmt.Fprintf(&b, "- [%s] %s\n", item.TaskRun, item.Line)
+				}
+			}
 			if includeTaskRun {
 				writeTextLogSection(&b, "TaskRun Logs")
 				for _, tr := range taskrunLogs {
@@ -1431,26 +1607,6 @@ func runServer(addr, apiKey string) {
 		w.Write([]byte(`{"status":"deleted"}`))
 	})
 
-	http.HandleFunc("/app/status", func(w http.ResponseWriter, r *http.Request) {
-		workspace := r.URL.Query().Get("workspace")
-		app := r.URL.Query().Get("app")
-		if workspace == "" || app == "" {
-			http.Error(w, "workspace and app are required", http.StatusBadRequest)
-			return
-		}
-		if !strings.HasPrefix(workspace, "ws-") {
-			http.Error(w, "workspace must start with ws-", http.StatusBadRequest)
-			return
-		}
-		info, err := getAppStatus(workspace, app)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		w.Write(info)
-	})
-
 	http.HandleFunc("/workspace/scale", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -1613,13 +1769,13 @@ func runServer(addr, apiKey string) {
 		"/workspace/scale",
 		"/workspace/restart",
 		"/cluster/metrics",
+		"/taskrun/all",
 		"/taskrun/status",
 		"/taskrun/logs",
 		"/taskrun/logs/stream",
 		"/run/logs",
 		"/pod/logs/stream",
 		"/app/delete",
-		"/app/status",
 		"/app/restart",
 		"/openapi.json",
 		"/docs",
@@ -2398,6 +2554,107 @@ func withResolvedPort(rawURL string, port int) string {
 	return u.String()
 }
 
+func discoverConnectionStringEnvNames(in Input) ([]string, []string, error) {
+	srcDir, cleanup, err := prepareSourceForMirror(in)
+	if err != nil {
+		return nil, nil, err
+	}
+	if cleanup != nil {
+		defer cleanup()
+	}
+
+	sqlSet := map[string]bool{}
+	redisSet := map[string]bool{}
+	err = filepath.Walk(srcDir, func(path string, info os.FileInfo, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if info.IsDir() {
+			if info.Name() == ".git" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		name := strings.ToLower(info.Name())
+		if !strings.HasPrefix(name, "appsettings") || !strings.HasSuffix(name, ".json") {
+			return nil
+		}
+		if info.Size() > 2*1024*1024 {
+			return nil
+		}
+		b, err := os.ReadFile(path)
+		if err != nil {
+			return nil
+		}
+		var doc map[string]any
+		if err := json.Unmarshal(b, &doc); err != nil {
+			return nil
+		}
+		cs, ok := doc["ConnectionStrings"].(map[string]any)
+		if !ok {
+			return nil
+		}
+		for key, raw := range cs {
+			val, ok := raw.(string)
+			if !ok {
+				continue
+			}
+			envName := "ConnectionStrings__" + strings.ReplaceAll(strings.TrimSpace(key), ":", "__")
+			if strings.TrimSpace(envName) == "" {
+				continue
+			}
+			switch classifyConnectionStringKind(key, val) {
+			case "redis":
+				redisSet[envName] = true
+			case "sql":
+				sqlSet[envName] = true
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+
+	sqlNames := make([]string, 0, len(sqlSet))
+	for k := range sqlSet {
+		sqlNames = append(sqlNames, k)
+	}
+	redisNames := make([]string, 0, len(redisSet))
+	for k := range redisSet {
+		redisNames = append(redisNames, k)
+	}
+	sort.Strings(sqlNames)
+	sort.Strings(redisNames)
+	return sqlNames, redisNames, nil
+}
+
+func classifyConnectionStringKind(key, value string) string {
+	k := strings.ToLower(strings.TrimSpace(key))
+	v := strings.ToLower(strings.TrimSpace(value))
+	joined := k + " " + v
+
+	// Common .NET background job key: always treat as SQL even if appsettings value is placeholder.
+	if strings.Contains(k, "hangfire") {
+		return "sql"
+	}
+	if strings.Contains(joined, "redis") || strings.HasPrefix(v, "redis://") {
+		return "redis"
+	}
+	if strings.Contains(joined, "host=") ||
+		strings.Contains(joined, "server=") ||
+		strings.Contains(joined, "database=") ||
+		strings.Contains(joined, "username=") ||
+		strings.Contains(joined, "user id=") ||
+		strings.Contains(joined, "initial catalog=") ||
+		strings.Contains(joined, "sslmode=") ||
+		strings.HasPrefix(v, "postgres://") ||
+		strings.HasPrefix(v, "postgresql://") {
+		return "sql"
+	}
+	return ""
+}
+
 func handleZipDeploy(in Input, targets []AppTarget, taskRuns map[string]string, runID string) error {
 	ns := in.Namespace
 	workspace := deriveWorkspace(in)
@@ -2465,6 +2722,30 @@ func handleZipDeploy(in Input, targets []AppTarget, taskRuns map[string]string, 
 	emitRunEvent(runID, workspace, leadApp, "dependency", "succeeded", "Dependencies ready", map[string]string{
 		"type": in.Dependency.Type,
 	})
+	if in.Dependency.Type == "sql" || in.Dependency.Type == "redis" || in.Dependency.Type == "both" {
+		sqlEnvNames, redisEnvNames, derr := discoverConnectionStringEnvNames(in)
+		if derr != nil {
+			log.Printf("connection env discovery skipped: %v", derr)
+		} else {
+			secretName := leadApp + "-app-config"
+			if in.Dependency.Type == "sql" || in.Dependency.Type == "both" {
+				for _, envName := range sqlEnvNames {
+					envRefs = appendEnvRef(envRefs, envName, secretName, "sql-conn")
+				}
+			}
+			if in.Dependency.Type == "redis" || in.Dependency.Type == "both" {
+				for _, envName := range redisEnvNames {
+					envRefs = appendEnvRef(envRefs, envName, secretName, "redis-conn")
+				}
+			}
+			if len(sqlEnvNames) > 0 || len(redisEnvNames) > 0 {
+				emitRunEvent(runID, workspace, leadApp, "dependency", "succeeded", "ConnectionStrings keys auto-mapped from appsettings", map[string]string{
+					"sql_keys":   strconv.Itoa(len(sqlEnvNames)),
+					"redis_keys": strconv.Itoa(len(redisEnvNames)),
+				})
+			}
+		}
+	}
 	if in.Migration.Enabled {
 		projectName := harborProjectName(workspace)
 		leadImage := fmt.Sprintf("%s/%s/%s:%s", in.Image.Registry, projectName, strings.ToLower(targets[0].Project), targets[0].Tag)
@@ -2505,8 +2786,19 @@ func handleZipDeploy(in Input, targets []AppTarget, taskRuns map[string]string, 
 			})
 		}
 		appEnvRefs := append([]AppEnvSecretRef{}, envRefs...)
+		if in.Dependency.Type == "sql" || in.Dependency.Type == "redis" || in.Dependency.Type == "both" {
+			secretName := leadApp + "-app-config"
+			profile := runtimeProfileForApp(in, t.AppName)
+			for _, ref := range profileConnectionEnvRefs(profile, in.Dependency.Type, secretName) {
+				appEnvRefs = appendEnvRef(appEnvRefs, ref.EnvName, ref.SecretName, ref.SecretKey)
+			}
+		}
 		appEnvRefs = appendEnvValue(appEnvRefs, "PORT", strconv.Itoa(t.ContainerPort))
 		for _, env := range in.ExtraEnv {
+			if isConnectionEnvName(env.Name) {
+				appEnvRefs = upsertEnvValue(appEnvRefs, env.Name, env.Value)
+				continue
+			}
 			appEnvRefs = appendEnvValue(appEnvRefs, env.Name, env.Value)
 		}
 		if backendServiceURL != "" && t.AppName != "backend" {
@@ -3679,44 +3971,6 @@ func deleteApp(workspace, app string) error {
 	return nil
 }
 
-func getAppStatus(workspace, app string) ([]byte, error) {
-	kcfg := filepath.Join("/home/beko/kubeconfigs", workspace+".yaml")
-	podsCmd := exec.Command("kubectl", "--kubeconfig", kcfg, "-n", workspace, "get", "pods", "-l", "app="+app, "-o", "jsonpath={range .items[*]}{.metadata.name}|{.status.phase}{\"\\n\"}{end}")
-	podsOut, podsErr := podsCmd.CombinedOutput()
-	if podsErr != nil {
-		return nil, fmt.Errorf("get app pods failed: %v", podsErr)
-	}
-	svcCmd := exec.Command("kubectl", "--kubeconfig", kcfg, "-n", workspace, "get", "svc", app, "-o", "jsonpath={.spec.ports[0].nodePort}")
-	svcOut, svcErr := svcCmd.CombinedOutput()
-	if svcErr != nil {
-		return nil, fmt.Errorf("get app service failed: %v", svcErr)
-	}
-
-	var pods []map[string]any
-	for _, line := range strings.Split(strings.TrimSpace(string(podsOut)), "\n") {
-		if strings.TrimSpace(line) == "" {
-			continue
-		}
-		parts := strings.Split(line, "|")
-		if len(parts) != 2 {
-			continue
-		}
-		pods = append(pods, map[string]any{
-			"name":  parts[0],
-			"phase": parts[1],
-		})
-	}
-
-	nodePort := strings.TrimSpace(string(svcOut))
-	out := map[string]any{
-		"workspace": workspace,
-		"app":       app,
-		"nodePort":  nodePort,
-		"pods":      pods,
-	}
-	return json.Marshal(out)
-}
-
 func scaleApp(workspace, app, replicas string) error {
 	kcfg := filepath.Join("/home/beko/kubeconfigs", workspace+".yaml")
 	cmd := exec.Command("kubectl", "--kubeconfig", kcfg, "-n", workspace, "scale", "deployment", app, "--replicas", replicas)
@@ -3837,6 +4091,15 @@ func openAPISpec() string {
           "401": { "description": "Unauthorized" },
           "500": { "description": "Delete failed" }
         }
+      }
+    },
+    "/taskrun/all": {
+      "get": {
+        "summary": "List all TaskRuns",
+        "parameters": [
+          { "name": "namespace", "in": "query", "required": false, "schema": { "type": "string" } }
+        ],
+        "responses": { "200": { "description": "Array of TaskRun statuses" } }
       }
     },
     "/taskrun/status": {
@@ -3963,16 +4226,6 @@ func openAPISpec() string {
           { "name": "workspace", "in": "query", "required": true, "schema": { "type": "string" } }
         ],
         "responses": { "200": { "description": "Restarted" } }
-      }
-    },
-    "/app/status": {
-      "get": {
-        "summary": "App status",
-        "parameters": [
-          { "name": "workspace", "in": "query", "required": true, "schema": { "type": "string" } },
-          { "name": "app", "in": "query", "required": true, "schema": { "type": "string" } }
-        ],
-        "responses": { "200": { "description": "Status" } }
       }
     },
     "/app/delete": {
@@ -4825,6 +5078,64 @@ func getTaskRunStatus(namespace, name string) ([]byte, error) {
 	return json.Marshal(resp)
 }
 
+func getAllTaskRuns(namespace string) ([]byte, error) {
+	cmd := kubectlCmd("-n", namespace, "get", "taskrun", "-o", "json")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return nil, fmt.Errorf("list taskruns failed: %v", err)
+	}
+	var list struct {
+		Items []struct {
+			Metadata struct {
+				Name              string            `json:"name"`
+				Namespace         string            `json:"namespace"`
+				CreationTimestamp string            `json:"creationTimestamp"`
+				Labels            map[string]string `json:"labels"`
+			} `json:"metadata"`
+			Status struct {
+				PodName        string `json:"podName"`
+				StartTime      string `json:"startTime"`
+				CompletionTime string `json:"completionTime"`
+				Conditions     []struct {
+					Status  string `json:"status"`
+					Reason  string `json:"reason"`
+					Message string `json:"message"`
+				} `json:"conditions"`
+			} `json:"status"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(out, &list); err != nil {
+		return nil, fmt.Errorf("parse taskrun list: %v", err)
+	}
+	results := make([]TaskRunStatus, 0, len(list.Items))
+	for _, item := range list.Items {
+		status := "Unknown"
+		reason := ""
+		message := ""
+		if len(item.Status.Conditions) > 0 {
+			status = item.Status.Conditions[0].Status
+			reason = item.Status.Conditions[0].Reason
+			message = item.Status.Conditions[0].Message
+		}
+		results = append(results, TaskRunStatus{
+			Name:           item.Metadata.Name,
+			Namespace:      item.Metadata.Namespace,
+			Status:         status,
+			Reason:         reason,
+			Message:        message,
+			PodName:        item.Status.PodName,
+			StartTime:      item.Status.StartTime,
+			CompletionTime: item.Status.CompletionTime,
+		})
+	}
+	sort.Slice(results, func(i, j int) bool {
+		ti, _ := time.Parse(time.RFC3339, results[i].CompletionTime)
+		tj, _ := time.Parse(time.RFC3339, results[j].CompletionTime)
+		return ti.After(tj)
+	})
+	return json.Marshal(results)
+}
+
 func getTaskRunLogs(namespace, name, tail string) ([]byte, error) {
 	statusBytes, err := getTaskRunStatus(namespace, name)
 	if err != nil {
@@ -5255,6 +5566,13 @@ func setDefaults(in *Input) {
 	if in.Image.Registry == "" {
 		in.Image.Registry = "lenovo:8443"
 	}
+	in.RuntimeProfile = normalizeRuntimeProfile(in.RuntimeProfile)
+	if in.RuntimeProfile == "" {
+		in.RuntimeProfile = "auto"
+	}
+	for i := range in.Apps {
+		in.Apps[i].RuntimeProfile = normalizeRuntimeProfile(in.Apps[i].RuntimeProfile)
+	}
 	if in.Image.Tag == "" {
 		in.Image.Tag = "latest"
 	}
@@ -5339,6 +5657,9 @@ func setDefaults(in *Input) {
 }
 
 func validate(in *Input) error {
+	if err := validateRuntimeProfile(in.RuntimeProfile, "runtime_profile"); err != nil {
+		return err
+	}
 	if in.Source.Type != "git" && in.Source.Type != "zip" {
 		return fmt.Errorf("source.type must be git or zip")
 	}
@@ -5388,6 +5709,9 @@ func validate(in *Input) error {
 		for i, app := range in.Apps {
 			if strings.TrimSpace(app.AppName) == "" {
 				return fmt.Errorf("apps[%d].app_name is required", i)
+			}
+			if err := validateRuntimeProfile(app.RuntimeProfile, fmt.Sprintf("apps[%d].runtime_profile", i)); err != nil {
+				return err
 			}
 			if _, err := normalizeContextSubDir(app.ContextSubDir); err != nil {
 				return fmt.Errorf("apps[%d]: %w", i, err)

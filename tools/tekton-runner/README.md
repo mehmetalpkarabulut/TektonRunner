@@ -34,6 +34,7 @@ cat request.json | ./tekton-runner
 {
   "namespace": "tekton-pipelines",
   "task": "build-and-push-generic",
+  "runtime_profile": "auto|dotnet|node|python|go|java|custom",
   "source": {
     "type": "git|zip",
     "repo_url": "https://github.com/user/repo",
@@ -50,6 +51,12 @@ cat request.json | ./tekton-runner
     "tag": "latest",
     "registry": "lenovo:8443"
   },
+  "apps": [
+    {
+      "app_name": "api",
+      "runtime_profile": "dotnet"
+    }
+  ],
   "file_storage": {
     "enabled": true,
     "pvc_name": "shared-file-pvc",
@@ -70,11 +77,27 @@ cat request.json | ./tekton-runner
 - Git kullanıcı/şifre verilirse secret otomatik oluşturulur.
 - Harbor project adı workspace'ten üretilir. `ws-myapp` workspace'i Harbor'da `myapp` projesine yazar.
 - `image.project` ve `apps[].project` Harbor project adı degil, proje icindeki repo adidir. Bos ise app adi kullanilir.
+- `dependency.type=sql|redis|both` iken runner kaynak koddaki `appsettings*.json` dosyalarini tarar; `ConnectionStrings` altindaki SQL/Redis anahtarlarini otomatik `ConnectionStrings__...` env olarak inject edip deployment'ta override eder (or. `ConnectionStrings__Hangfire`).
+- `ConnectionStrings` altinda adinda `Hangfire` gecen anahtarlar deger placeholder olsa bile SQL olarak kabul edilir ve `sql-conn` ile override edilir.
+- `runtime_profile` ile app bazli env aliaslari zorlanabilir: `dotnet` profili `ConnectionStrings__...`, `node/python/go/java` profili `DATABASE_URL` + `REDIS_URL` aliaslarini otomatik ekler. `apps[].runtime_profile` verilirse app bazinda global profili ezer.
 - NFS/SMB bilgisi verilirse PV+PVC (ve SMB secret) otomatik oluşturulur.
 - `file_storage.enabled=true` verilirse uygulama pod'una ortak RWX storage mount edilir.
 - `file_storage.sub_path` bos birakilirsa runner NFS/SMB paylasimi altinda otomatik klasor olusturur. Tek app deploy'da varsayilan klasor workspace adinin `ws-` siz halidir; multi-app deploy'da `<workspace>/<app>` formatina duser.
 - `file_storage.nfs` veya `file_storage.smb` verilirse workspace cluster icinde ilgili PVC otomatik olusturulur.
 - `file_storage.enabled=true` ve storage backend bilgisi verilmezse varsayilan olarak `10.134.70.112:/srv/nfs/shared` ve `1Gi` kullanilir.
+
+## Uygulama Config Sozlesmesi (onerilen)
+
+Kullanici uygulamalarinin `appsettings*.json` icinde su anahtarlarin bulunmasi onerilir:
+
+- SQL: `ConnectionStrings:DefaultConnection`
+- Hangfire (varsa): `ConnectionStrings:Hangfire`
+- Redis: `ConnectionStrings:Redis`
+
+Not:
+
+- Bu key'ler placeholder olabilir; gercek degerler deployment sirasinda Kubernetes env ile override edilir.
+- Farkli ad kullanilacaksa `extra_env` ile `ConnectionStrings__<Key>` olarak gonderilebilir.
 
 ## SMB Notu
 
@@ -355,6 +378,9 @@ Boylece .NET, Python, Node.js ve benzeri farkli uygulamalar ayni dependency akis
   }
 }
 ```
+
+Not:
+- `connection_env` `.NET` tarzı bir anahtar ise (`ConnectionStrings__DefaultConnection`, `SQL_CONNECTION_STRING`, `DEFAULT_CONNECTION`), runner `DATABASE_URL` env'ini eklemez. Bu, `.NET/Npgsql` uygulamalarında URI formatli `DATABASE_URL` ile `.NET` connection string formatinin carpisip startup'i bozmasini engeller.
 
 ## Harbor Mirror (Redis / SQL)
 

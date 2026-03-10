@@ -13,5 +13,9 @@ Bu repo icin Codex calisma kurali:
    - commit at,
    - `origin/main` dalina push et.
 8. Workspace node'larda image pull sorunu varsa `CODEX_BOOTSTRAP.md` icindeki `lenovo no such host` fix adimlarini uygula.
+9. Connection string akisi:
+   - Uygulama konfiginde en az `ConnectionStrings:DefaultConnection`, `ConnectionStrings:Redis` ve Hangfire kullaniyorsa `ConnectionStrings:Hangfire` anahtarlarini bekle.
+   - Placeholder degerler kabul edilir; runner deployment sirasinda Kubernetes env ile override eder.
+   - `ConnectionStrings` altinda adinda `Hangfire` gecen anahtarlar SQL kabul edilmelidir.
 
 Not: Bu repo test/lab ortam odaklidir; uretim hardening adimlari ayrica planlanmalidir.

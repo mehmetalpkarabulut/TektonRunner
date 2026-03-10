@@ -8,6 +8,7 @@ Tekton tabanli build + Harbor push + workspace deploy orchestration reposu.
 - Ortam kurulum/runbook: `CODEX_BOOTSTRAP.md`
 - Uctan uca akis (kim ne yapar): `docs/tekton-runner-end-to-end-flow.md`
 - Proje ureten ekipler icin ortak gereksinimler: `docs/ORTAKSOZLESME.md`
+- Connection string sozlesmesi ve runtime mapping notlari: `tools/tekton-runner/README.md`
 
 ## Ana Klasorler
 

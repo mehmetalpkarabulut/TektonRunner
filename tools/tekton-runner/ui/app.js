@@ -264,6 +264,12 @@ function renderPrettyLog(el, text) {
       cls = "log-line section";
     } else if (/^--- /.test(trimmed)) {
       cls = "log-line subhead";
+    } else if (/^\s*-\s+\[[^\]]+\]\s+/.test(line) && /error|warning|exception|failed|panic/i.test(line)) {
+      cls = "log-line source-error";
+    } else if (/^\/.+\(\d+,\d+\):\s*(error|warning)\s+[A-Z0-9]+:/i.test(trimmed)) {
+      cls = "log-line source-error";
+    } else if (/^(error|warning)\s+[A-Z0-9]+:/i.test(trimmed)) {
+      cls = "log-line source-error";
     } else if (/\[FAIL\]|(^|\s)ERROR:|(^|\s)failed\b|exception|panic/i.test(trimmed)) {
       cls = "log-line error";
     } else if (/\[OK\]|\bsucceeded\b|\bcompleted\b/i.test(trimmed)) {

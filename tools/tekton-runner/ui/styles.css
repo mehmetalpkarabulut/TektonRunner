@@ -245,6 +245,14 @@ body {
   font-weight: 700;
 }
 
+.log-line.source-error {
+  color: #ffd38f;
+  font-weight: 700;
+  background: rgba(255, 164, 76, 0.08);
+  border-left: 3px solid rgba(255, 164, 76, 0.8);
+  padding-left: 8px;
+}
+
 .log-line.meta {
   color: #9fb0c8;
 }
