@@ -1006,6 +1006,9 @@ function buildGitPayload() {
     },
     deploy: { container_port: port }
   };
+  payload.auto_defaults = document.getElementById("gitAutoDefaults")?.checked !== false;
+  const replacements = parseReplacements("git");
+  if (Object.keys(replacements).length > 0) payload.replacements = replacements;
   const storage = buildSharedStoragePayload("git");
   if (storage) payload.file_storage = storage;
   const extraEnv = parseExtraEnv("git");
@@ -1119,6 +1122,40 @@ function parseExtraEnv(prefix) {
       }
       return { name: line.slice(0, eq).trim(), value: line.slice(eq + 1).trim() };
     });
+}
+
+function parseReplacements(prefix) {
+  const raw = document.getElementById(`${prefix}Replacements`)?.value.trim() || "";
+  if (!raw) {
+    return {};
+  }
+  const out = {};
+  raw
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .forEach((line, index) => {
+      const eq = line.indexOf("=");
+      if (eq <= 0) {
+        throw new Error(`Placeholder Replacements satir ${index + 1} gecersiz. Format {key}=value olmali.`);
+      }
+      const key = line.slice(0, eq).trim();
+      const value = line.slice(eq + 1).trim();
+      if (!key) {
+        throw new Error(`Placeholder Replacements satir ${index + 1} anahtar bos olamaz.`);
+      }
+      out[key] = value;
+    });
+  return out;
+}
+
+function formatReplacements(replacements) {
+  if (!replacements || typeof replacements !== "object") {
+    return "";
+  }
+  return Object.entries(replacements)
+    .map(([k, v]) => `${k}=${v ?? ""}`)
+    .join("\n");
 }
 
 function formatExtraEnv(extraEnv) {
@@ -1248,6 +1285,9 @@ function buildZipPayload() {
     },
     deploy: {}
   };
+  payload.auto_defaults = document.getElementById("zipAutoDefaults")?.checked !== false;
+  const replacements = parseReplacements("zip");
+  if (Object.keys(replacements).length > 0) payload.replacements = replacements;
   const storage = buildSharedStoragePayload("zip");
   if (storage) payload.file_storage = storage;
   const extraEnv = parseExtraEnv("zip");
@@ -1272,6 +1312,8 @@ function fillGitForm(sample) {
   document.getElementById("gitImageTag").value = sample.image.tag;
   document.getElementById("gitRegistry").value = sample.image.registry;
   document.getElementById("gitExtraEnv").value = formatExtraEnv(sample.extra_env);
+  document.getElementById("gitReplacements").value = formatReplacements(sample.replacements);
+  document.getElementById("gitAutoDefaults").checked = sample.auto_defaults !== false;
   document.getElementById("gitPort").value = sample.deploy.container_port;
   const depType = sample.dependency?.type || "none";
   document.getElementById("gitDepType").value = depType;
@@ -1309,6 +1351,8 @@ function fillZipForm(sample) {
   document.getElementById("zipImageTag").value = sample.image.tag;
   document.getElementById("zipRegistry").value = sample.image.registry;
   document.getElementById("zipExtraEnv").value = formatExtraEnv(sample.extra_env);
+  document.getElementById("zipReplacements").value = formatReplacements(sample.replacements);
+  document.getElementById("zipAutoDefaults").checked = sample.auto_defaults !== false;
   document.getElementById("zipPort").value = sample.deploy?.container_port || "";
   const depType = sample.dependency?.type || "none";
   document.getElementById("zipDepType").value = depType;
@@ -1449,6 +1493,10 @@ const sampleGit = {
       size: "1Gi"
     }
   },
+  auto_defaults: true,
+  replacements: {
+    "{Mehmet}": "x"
+  },
   extra_env: [
     { name: "JWT_SECRET", value: "super-secret" }
   ]
@@ -1494,6 +1542,10 @@ const sampleZip = {
       path: "/srv/nfs/shared",
       size: "1Gi"
     }
+  },
+  auto_defaults: true,
+  replacements: {
+    "{Mehmet}": "x"
   },
   extra_env: [
     { name: "JWT_SECRET", value: "super-secret" }

@@ -10,7 +10,7 @@
       href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap"
       rel="stylesheet"
     />
-    <link rel="stylesheet" href="/ui/styles.css?v=20260302-7" />
+    <link rel="stylesheet" href="/ui/styles.css?v=20260310-1" />
   </head>
   <body>
     <div class="orb orb-a"></div>
@@ -107,6 +107,8 @@
               <div class="form-field"><label>Image Tag</label><input id="gitImageTag" value="latest" /></div>
               <div class="form-field"><label>Registry</label><input id="gitRegistry" value="lenovo:8443" /></div>
               <div class="form-field"><label>Extra Environment Variables</label><textarea id="gitExtraEnv" rows="5" placeholder="JWT_SECRET=super-secret"></textarea></div>
+              <div class="form-field"><label>Placeholder Replacements</label><textarea id="gitReplacements" rows="5" placeholder="{Mehmet}=x&#10;{default_db}=override-optional"></textarea></div>
+              <div class="form-field"><label>Auto Default Placeholders</label><input id="gitAutoDefaults" type="checkbox" checked /></div>
               <div class="form-field"><label>Redis Image</label><input id="gitRedisImage" value="lenovo:8443/library/redis:7-alpine" /></div>
               <div class="form-field"><label>Redis Service</label><input id="gitRedisService" value="redis" /></div>
               <div class="form-field"><label>Redis Port</label><input id="gitRedisPort" type="number" min="1" value="6379" /></div>
@@ -175,6 +177,8 @@
               <div class="form-field"><label>Image Tag</label><input id="zipImageTag" value="latest" /></div>
               <div class="form-field"><label>Registry</label><input id="zipRegistry" value="lenovo:8443" /></div>
               <div class="form-field"><label>Extra Environment Variables</label><textarea id="zipExtraEnv" rows="5" placeholder="JWT_SECRET=super-secret"></textarea></div>
+              <div class="form-field"><label>Placeholder Replacements</label><textarea id="zipReplacements" rows="5" placeholder="{Mehmet}=x&#10;{default_redis}=override-optional"></textarea></div>
+              <div class="form-field"><label>Auto Default Placeholders</label><input id="zipAutoDefaults" type="checkbox" checked /></div>
               <div class="form-field" id="zipStoragePvcWrap"><label>Storage PVC Name</label><input id="zipStoragePvc" value="shared-file-pvc" /></div>
               <div class="form-field" id="zipStorageMountWrap"><label>Storage Mount Path</label><input id="zipStorageMount" value="/app/storage" /></div>
               <div class="form-field" id="zipStorageNfsServerWrap"><label>NFS Server</label><input id="zipStorageNfsServer" placeholder="10.134.70.112" /></div>
@@ -260,6 +264,6 @@
       </main>
     </div>
 
-    <script src="/ui/app.js?v=20260302-7"></script>
+    <script src="/ui/app.js?v=20260310-1"></script>
   </body>
 </html>

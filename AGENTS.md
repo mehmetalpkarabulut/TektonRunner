@@ -17,5 +17,9 @@ Bu repo icin Codex calisma kurali:
    - Uygulama konfiginde en az `ConnectionStrings:DefaultConnection`, `ConnectionStrings:Redis` ve Hangfire kullaniyorsa `ConnectionStrings:Hangfire` anahtarlarini bekle.
    - Placeholder degerler kabul edilir; runner deployment sirasinda Kubernetes env ile override eder.
    - `ConnectionStrings` altinda adinda `Hangfire` gecen anahtarlar SQL kabul edilmelidir.
+10. Placeholder replacement akisi:
+   - Runner request'inde `auto_defaults` (varsayilan true) ve `replacements` map alanlari desteklenir.
+   - Varsayilan placeholder'lar: `{default_db}`, `{default_db_url}`, `{default_redis}`, `{default_redis_url}`.
+   - `appsettings*.json` taranir; placeholder bulunan string alanlar replace edilip `Section__Sub__Key` formatinda env olarak deploy edilir.
 
 Not: Bu repo test/lab ortam odaklidir; uretim hardening adimlari ayrica planlanmalidir.

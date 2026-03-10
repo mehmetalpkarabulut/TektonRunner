@@ -28,19 +28,21 @@ import (
 )
 
 type Input struct {
-	Namespace      string      `json:"namespace"`
-	Task           string      `json:"task"`
-	AppName        string      `json:"app_name"`
-	Apps           []AppSpec   `json:"apps"`
-	RuntimeProfile string      `json:"runtime_profile"`
-	Workspace      string      `json:"workspace"`
-	Deploy         Deploy      `json:"deploy"`
-	Source         Source      `json:"source"`
-	Image          Image       `json:"image"`
-	FileStorage    FileStorage `json:"file_storage"`
-	Dependency     Dependency  `json:"dependency"`
-	Migration      Migration   `json:"migration"`
-	ExtraEnv       []EnvVar    `json:"extra_env"`
+	Namespace      string            `json:"namespace"`
+	Task           string            `json:"task"`
+	AppName        string            `json:"app_name"`
+	Apps           []AppSpec         `json:"apps"`
+	RuntimeProfile string            `json:"runtime_profile"`
+	Replacements   map[string]string `json:"replacements"`
+	AutoDefaults   *bool             `json:"auto_defaults,omitempty"`
+	Workspace      string            `json:"workspace"`
+	Deploy         Deploy            `json:"deploy"`
+	Source         Source            `json:"source"`
+	Image          Image             `json:"image"`
+	FileStorage    FileStorage       `json:"file_storage"`
+	Dependency     Dependency        `json:"dependency"`
+	Migration      Migration         `json:"migration"`
+	ExtraEnv       []EnvVar          `json:"extra_env"`
 }
 
 type EnvVar struct {
@@ -2554,6 +2556,225 @@ func withResolvedPort(rawURL string, port int) string {
 	return u.String()
 }
 
+var placeholderTokenRe = regexp.MustCompile(`\{[^{}]+\}`)
+
+func isAutoDefaultsEnabled(in Input) bool {
+	if in.AutoDefaults == nil {
+		return true
+	}
+	return *in.AutoDefaults
+}
+
+func normalizePlaceholderKey(raw string) string {
+	k := strings.TrimSpace(raw)
+	if k == "" {
+		return ""
+	}
+	if strings.HasPrefix(k, "{") && strings.HasSuffix(k, "}") && len(k) > 2 {
+		return strings.ToLower(k)
+	}
+	return strings.ToLower("{" + k + "}")
+}
+
+func buildDefaultPlaceholderValues(workspace string, dep Dependency) map[string]string {
+	out := map[string]string{}
+	ws := strings.TrimSpace(workspace)
+	depType := strings.ToLower(strings.TrimSpace(dep.Type))
+	if depType == "sql" || depType == "both" {
+		sqlName := sanitizeName(dep.SQL.ServiceName)
+		if sqlName == "" {
+			sqlName = "postgres"
+		}
+		host := fmt.Sprintf("%s.%s.svc.cluster.local", sqlName, ws)
+		out["{default_db}"] = fmt.Sprintf(
+			"Host=%s;Port=%d;Database=%s;Username=%s;Password=%s;SSL Mode=Disable;",
+			host, dep.SQL.Port, dep.SQL.Database, dep.SQL.Username, dep.SQL.Password,
+		)
+		out["{default_db_url}"] = fmt.Sprintf(
+			"postgresql://%s:%s@%s:%d/%s?sslmode=disable",
+			neturl.QueryEscape(dep.SQL.Username), neturl.QueryEscape(dep.SQL.Password), host, dep.SQL.Port, neturl.PathEscape(dep.SQL.Database),
+		)
+	}
+	if depType == "redis" || depType == "both" {
+		redisName := sanitizeName(dep.Redis.ServiceName)
+		if redisName == "" {
+			redisName = "redis"
+		}
+		host := fmt.Sprintf("%s.%s.svc.cluster.local", redisName, ws)
+		conn := fmt.Sprintf("%s:%d", host, dep.Redis.Port)
+		out["{default_redis}"] = conn
+		out["{default_redis_url}"] = fmt.Sprintf("redis://%s/0", conn)
+	}
+	return out
+}
+
+func mergePlaceholderValues(defaults, user map[string]string) map[string]string {
+	out := map[string]string{}
+	for k, v := range defaults {
+		nk := normalizePlaceholderKey(k)
+		if nk == "" {
+			continue
+		}
+		out[nk] = v
+	}
+	for k, v := range user {
+		nk := normalizePlaceholderKey(k)
+		if nk == "" {
+			continue
+		}
+		out[nk] = strings.TrimSpace(v)
+	}
+	return out
+}
+
+func replacePlaceholdersInString(s string, values map[string]string) (string, []string) {
+	if !strings.Contains(s, "{") {
+		return s, nil
+	}
+	unresolved := map[string]bool{}
+	out := placeholderTokenRe.ReplaceAllStringFunc(s, func(tok string) string {
+		key := normalizePlaceholderKey(tok)
+		if v, ok := values[key]; ok {
+			return v
+		}
+		unresolved[tok] = true
+		return tok
+	})
+	misses := make([]string, 0, len(unresolved))
+	for k := range unresolved {
+		misses = append(misses, k)
+	}
+	sort.Strings(misses)
+	return out, misses
+}
+
+func appsettingsSortRank(path string) int {
+	name := strings.ToLower(filepath.Base(path))
+	if name == "appsettings.json" {
+		return 0
+	}
+	if strings.HasPrefix(name, "appsettings.") && strings.HasSuffix(name, ".json") {
+		return 1
+	}
+	return 2
+}
+
+func pathToEnvName(parts []string) string {
+	if len(parts) == 0 {
+		return ""
+	}
+	clean := make([]string, 0, len(parts))
+	for _, p := range parts {
+		t := strings.TrimSpace(p)
+		if t == "" {
+			continue
+		}
+		clean = append(clean, t)
+	}
+	if len(clean) == 0 {
+		return ""
+	}
+	return strings.Join(clean, "__")
+}
+
+func collectAppsettingsEnvFromPlaceholders(in Input, values map[string]string) ([]AppEnvSecretRef, []string, error) {
+	if len(values) == 0 {
+		return nil, nil, nil
+	}
+	srcDir, cleanup, err := prepareSourceForMirror(in)
+	if err != nil {
+		return nil, nil, err
+	}
+	if cleanup != nil {
+		defer cleanup()
+	}
+
+	files := make([]string, 0, 8)
+	if err := filepath.Walk(srcDir, func(p string, info os.FileInfo, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if info.IsDir() {
+			if info.Name() == ".git" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		name := strings.ToLower(info.Name())
+		if !strings.HasPrefix(name, "appsettings") || !strings.HasSuffix(name, ".json") {
+			return nil
+		}
+		if info.Size() > 2*1024*1024 {
+			return nil
+		}
+		files = append(files, p)
+		return nil
+	}); err != nil {
+		return nil, nil, err
+	}
+	sort.Slice(files, func(i, j int) bool {
+		ri := appsettingsSortRank(files[i])
+		rj := appsettingsSortRank(files[j])
+		if ri != rj {
+			return ri < rj
+		}
+		return files[i] < files[j]
+	})
+
+	refs := make([]AppEnvSecretRef, 0, 16)
+	unresolved := map[string]bool{}
+	var walkNode func(parts []string, node any)
+	walkNode = func(parts []string, node any) {
+		switch v := node.(type) {
+		case map[string]any:
+			keys := make([]string, 0, len(v))
+			for k := range v {
+				keys = append(keys, k)
+			}
+			sort.Strings(keys)
+			for _, k := range keys {
+				walkNode(append(parts, k), v[k])
+			}
+		case []any:
+			for i := range v {
+				walkNode(append(parts, strconv.Itoa(i)), v[i])
+			}
+		case string:
+			replaced, misses := replacePlaceholdersInString(v, values)
+			for _, m := range misses {
+				unresolved[m] = true
+			}
+			if replaced == v {
+				return
+			}
+			env := pathToEnvName(parts)
+			if env == "" {
+				return
+			}
+			refs = upsertEnvValue(refs, env, replaced)
+		}
+	}
+
+	for _, f := range files {
+		b, err := os.ReadFile(f)
+		if err != nil {
+			continue
+		}
+		var doc map[string]any
+		if err := json.Unmarshal(b, &doc); err != nil {
+			continue
+		}
+		walkNode(nil, doc)
+	}
+
+	misses := make([]string, 0, len(unresolved))
+	for k := range unresolved {
+		misses = append(misses, k)
+	}
+	sort.Strings(misses)
+	return refs, misses, nil
+}
+
 func discoverConnectionStringEnvNames(in Input) ([]string, []string, error) {
 	srcDir, cleanup, err := prepareSourceForMirror(in)
 	if err != nil {
@@ -2742,6 +2963,32 @@ func handleZipDeploy(in Input, targets []AppTarget, taskRuns map[string]string, 
 				emitRunEvent(runID, workspace, leadApp, "dependency", "succeeded", "ConnectionStrings keys auto-mapped from appsettings", map[string]string{
 					"sql_keys":   strconv.Itoa(len(sqlEnvNames)),
 					"redis_keys": strconv.Itoa(len(redisEnvNames)),
+				})
+			}
+		}
+	}
+	placeholderValues := map[string]string{}
+	if isAutoDefaultsEnabled(in) {
+		placeholderValues = mergePlaceholderValues(placeholderValues, buildDefaultPlaceholderValues(clusterName, in.Dependency))
+	}
+	placeholderValues = mergePlaceholderValues(placeholderValues, in.Replacements)
+	if len(placeholderValues) > 0 {
+		replacedRefs, unresolved, derr := collectAppsettingsEnvFromPlaceholders(in, placeholderValues)
+		if derr != nil {
+			log.Printf("appsettings replacement skipped: %v", derr)
+		} else {
+			for _, ref := range replacedRefs {
+				envRefs = upsertEnvValue(envRefs, ref.EnvName, ref.Value)
+			}
+			if len(replacedRefs) > 0 {
+				emitRunEvent(runID, workspace, leadApp, "config", "succeeded", "Appsettings placeholders mapped to env", map[string]string{
+					"env_count": strconv.Itoa(len(replacedRefs)),
+				})
+			}
+			if len(unresolved) > 0 {
+				emitRunEvent(runID, workspace, leadApp, "config", "warning", "Unresolved placeholders found in appsettings", map[string]string{
+					"count": strconv.Itoa(len(unresolved)),
+					"keys":  strings.Join(unresolved, ","),
 				})
 			}
 		}
@@ -5566,6 +5813,10 @@ func setDefaults(in *Input) {
 	if in.Image.Registry == "" {
 		in.Image.Registry = "lenovo:8443"
 	}
+	if in.AutoDefaults == nil {
+		v := true
+		in.AutoDefaults = &v
+	}
 	in.RuntimeProfile = normalizeRuntimeProfile(in.RuntimeProfile)
 	if in.RuntimeProfile == "" {
 		in.RuntimeProfile = "auto"
@@ -5659,6 +5910,11 @@ func setDefaults(in *Input) {
 func validate(in *Input) error {
 	if err := validateRuntimeProfile(in.RuntimeProfile, "runtime_profile"); err != nil {
 		return err
+	}
+	for k := range in.Replacements {
+		if strings.TrimSpace(k) == "" {
+			return fmt.Errorf("replacements contains empty key")
+		}
 	}
 	if in.Source.Type != "git" && in.Source.Type != "zip" {
 		return fmt.Errorf("source.type must be git or zip")

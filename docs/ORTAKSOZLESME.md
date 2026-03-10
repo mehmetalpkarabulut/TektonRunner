@@ -138,6 +138,32 @@ Davranis:
 - `extra_env` her zaman opsiyoneldir.
 - Connection tipi bir key (`ConnectionStrings__...`, `DATABASE_URL`, `REDIS_URL`, vb.) `extra_env` ile gelirse platformun otomatik degerini override eder.
 
+## 8.1 Placeholder Replacements Kurali
+
+Runner isteginde su alanlar kullanilir:
+
+- `auto_defaults` (varsayilan: `true`)
+- `replacements` (kullanici map'i)
+
+Platform varsayilan placeholder'lari:
+
+- `{default_db}` -> SQL .NET connection string
+- `{default_db_url}` -> SQL URL
+- `{default_redis}` -> `host:port`
+- `{default_redis_url}` -> Redis URL
+
+Kullanici ek placeholder verebilir:
+
+```json
+{
+  "replacements": {
+    "{Mehmet}": "x"
+  }
+}
+```
+
+Runner `appsettings*.json` icindeki string alanlari tarar, placeholder replace eder ve degisen key-path'leri Kubernetes env olarak inject eder.
+
 ## 9. Appsettings Tarama Mantigi
 
 Runner kaynak kodu (`git` veya `zip`) indirir, `appsettings*.json` dosyalarinda `ConnectionStrings` keylerini tarar ve uygun env maplerini olusturur.
@@ -152,6 +178,10 @@ Not:
 {
   "workspace": "ws-suite",
   "runtime_profile": "auto",
+  "auto_defaults": true,
+  "replacements": {
+    "{Mehmet}": "x"
+  },
   "source": {
     "type": "zip",
     "zip_url": "http://zip-server.tekton-pipelines.svc.cluster.local:8080/suite.zip"
