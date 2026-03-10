@@ -163,6 +163,7 @@ Kullanici ek placeholder verebilir:
 ```
 
 Runner `appsettings*.json` icindeki string alanlari tarar, placeholder replace eder ve degisen key-path'leri Kubernetes env olarak inject eder.
+Desteklenen placeholder formatlari: `{token}` ve `#{token}#`.
 
 ### 8.2 Uygulama ve UI Ornekleri
 
@@ -172,11 +173,14 @@ Appsettings icinde placeholder girisi:
 {
   "ConnectionStrings": {
     "DefaultConnection": "{default_db}",
-    "Redis": "{default_redis_url}",
+    "Redis": "#{default_redis_url}#",
     "MasterDataConnection": "{Mehmet}"
   },
   "FeatureFlags": {
     "TenantCode": "{TenantCode}"
+  },
+  "Okta": {
+    "RequireHttpsMetadata": "#{requireHttpsMetadata}#"
   }
 }
 ```
@@ -186,11 +190,12 @@ UI `Placeholder Replacements` alanina giris formati:
 ```text
 {Mehmet}=Host=postgres.ws-demo.svc.cluster.local;Port=5432;Database=MasterDb;Username=postgres;Password=StrongPass_123!;SSL Mode=Disable;
 {TenantCode}=TR01
+{requireHttpsMetadata}=false
 ```
 
 Format kurali:
 - Her satir `{Key}=value` seklindedir.
-- Sol taraf mutlaka `{}` ile yazilmalidir.
+- Sol taraf mutlaka `{}` ile yazilmalidir (`#{}` degil).
 - DB icin standart token: `{default_db}`
 - Redis URL icin standart token: `{default_redis_url}`
 

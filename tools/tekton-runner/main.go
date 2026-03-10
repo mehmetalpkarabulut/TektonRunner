@@ -2556,7 +2556,7 @@ func withResolvedPort(rawURL string, port int) string {
 	return u.String()
 }
 
-var placeholderTokenRe = regexp.MustCompile(`\{[^{}]+\}`)
+var placeholderTokenRe = regexp.MustCompile(`#\{[^{}]+\}#|\{[^{}]+\}`)
 
 func isAutoDefaultsEnabled(in Input) bool {
 	if in.AutoDefaults == nil {
@@ -2633,11 +2633,18 @@ func replacePlaceholdersInString(s string, values map[string]string) (string, []
 	}
 	unresolved := map[string]bool{}
 	out := placeholderTokenRe.ReplaceAllStringFunc(s, func(tok string) string {
-		key := normalizePlaceholderKey(tok)
+		trimmed := strings.TrimSpace(tok)
+		trimmed = strings.TrimPrefix(trimmed, "#")
+		trimmed = strings.TrimSuffix(trimmed, "#")
+		key := normalizePlaceholderKey(trimmed)
 		if v, ok := values[key]; ok {
 			return v
 		}
-		unresolved[tok] = true
+		if key != "" {
+			unresolved[key] = true
+		} else {
+			unresolved[tok] = true
+		}
 		return tok
 	})
 	misses := make([]string, 0, len(unresolved))

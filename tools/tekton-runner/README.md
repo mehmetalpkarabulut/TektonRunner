@@ -86,6 +86,7 @@ cat request.json | ./tekton-runner
 - `ConnectionStrings` altinda adinda `Hangfire` gecen anahtarlar deger placeholder olsa bile SQL olarak kabul edilir ve `sql-conn` ile override edilir.
 - `auto_defaults=true` ise runner su placeholder degerlerini otomatik doldurur: `{default_db}`, `{default_db_url}`, `{default_redis}`, `{default_redis_url}`.
 - `replacements` ile kullanici ek placeholder map'i verebilir. Ornek: `\"{Mehmet}\": \"x\"`.
+- Placeholder formati olarak hem `{token}` hem `#{token}#` desteklenir; runner replace sirasinda token'i normalize eder.
 - Runner `appsettings*.json` dosyalarini tarar, placeholder gecen string alanlari replace eder ve ilgili key path'i Kubernetes env (`Section__Sub__Key`) olarak inject eder.
 - `runtime_profile` ile app bazli env aliaslari zorlanabilir: `dotnet` profili `ConnectionStrings__...`, `node/python/go/java` profili `DATABASE_URL` + `REDIS_URL` aliaslarini otomatik ekler. `apps[].runtime_profile` verilirse app bazinda global profili ezer.
 - NFS/SMB bilgisi verilirse PV+PVC (ve SMB secret) otomatik oluşturulur.
