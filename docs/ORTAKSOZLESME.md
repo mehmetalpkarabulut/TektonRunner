@@ -11,8 +11,9 @@ Kapsam:
 
 1. Uygulama kodu ortaktan gelsin, ortam farklari runtime env ile verilsin.
 2. Secret ve connection string degerleri repoda tutulmasin.
-3. Uygulama config dosyasi (`appsettings`, `application.yml`, `.env.example`) sadece key/placeholder tasiyabilir.
-4. Gercek degeri runner Kubernetes Deployment `env` alanina inject eder.
+3. Uygulama config dosyasi (`appsettings`, `application.yml`, `.env.example`) sadece key/placeholder tasir.
+4. Gercek degerleri Tekton Runner Kubernetes Deployment `env` alanina inject eder.
+5. Runner `appsettings.json` dosyasini fiziksel olarak degistirmez; env override uygular.
 
 ## 2. Workspace ve Pod Modeli
 
@@ -38,7 +39,7 @@ Tum ekipler uygulama config dosyasinda asagidaki keyleri tanimlamalidir (placeho
 - `ConnectionStrings:Redis`
 - `ConnectionStrings:Hangfire` (Hangfire kullananlarda)
 
-Bu anahtarlar .NET disi dillerde dogrudan kullanilmayabilir; yine de platform standardi olarak tutulur.
+.NET disi dillerde bu key'ler dogrudan kullanilmayabilir; yine de platform standardi olarak tavsiye edilir.
 
 ## 4. Platformun Urettigi Env Anahtarlari
 
@@ -57,63 +58,85 @@ Redis:
 - `REDIS_URL`
 
 Hangfire:
-- `ConnectionStrings__Hangfire` anahtari SQL olarak kabul edilir ve SQL connection ile override edilir.
+- `ConnectionStrings__Hangfire*` keyleri SQL olarak kabul edilir ve SQL connection ile override edilir.
 
-## 5. Connection String Formatlari
+## 5. Varsayilan Tokenlar ve Formatlar
 
-### 5.1 SQL (.NET/Npgsql formati)
+### 5.1 SQL tokenlari
 
-`Host=postgres.<workspace>.svc.cluster.local;Port=5432;Database=<DB>;Username=postgres;Password=<PASS>;SSL Mode=Disable;`
+- `{default_db}` -> .NET/Npgsql string
+  - `Host=postgres.<workspace>.svc.cluster.local;Port=5432;Database=<DB>;Username=postgres;Password=<PASS>;SSL Mode=Disable;`
+- `{default_db_url}` -> URL formati
+  - `postgresql://postgres:<PASS>@postgres.<workspace>.svc.cluster.local:5432/<DB>?sslmode=disable`
 
-### 5.2 SQL (URL formati)
+### 5.2 Redis tokenlari
 
-`postgresql://postgres:<PASS>@postgres.<workspace>.svc.cluster.local:5432/<DB>?sslmode=disable`
+- `{default_redis}` -> `host:port`
+  - `redis.<workspace>.svc.cluster.local:6379`
+- `{default_redis_url}` -> URL
+  - `redis://redis.<workspace>.svc.cluster.local:6379/0`
 
-### 5.3 Redis
+## 6. Appsettings Placeholder Kurali
 
-- Host/port: `redis.<workspace>.svc.cluster.local:6379`
-- URL: `redis://redis.<workspace>.svc.cluster.local:6379/0`
+Desteklenen placeholder formatlari:
+- `{token}`
+- `#{token}#`
 
-## 6. Dil Bazli Uygulama Beklentisi
+Runner iki formati da replace eder.
 
-### 6.1 .NET
-
-`appsettings*.json` icinde su keyler olmali:
+Ornek:
 
 ```json
 {
   "ConnectionStrings": {
-    "DefaultConnection": "placeholder",
-    "Redis": "placeholder",
-    "Hangfire": "placeholder"
+    "DefaultConnection": "{default_db}",
+    "Redis": "{default_redis}",
+    "HangfireConnection": "{default_db}"
+  },
+  "Cache": {
+    "Redis": {
+      "ConnectionString": "{default_redis}"
+    }
+  },
+  "Okta": {
+    "OktaDomain": "#{oktaDomain}#",
+    "AuthorizationServerId": "#{authorizationServerId}#",
+    "Audience": "#{oktaAudience}#",
+    "ClientId": "#{oktaClientId}#"
   }
 }
 ```
 
-Runtime'da `ConnectionStrings__...` env ile override edilir.
+## 7. UI Placeholder Replacements Kurali
 
-### 6.2 Java (Spring Boot)
+UI `Placeholder Replacements` alani satir formati:
 
-Onerilen binding:
-- `spring.datasource.url=${DATABASE_URL}`
-- `spring.data.redis.url=${REDIS_URL}`
+```text
+{oktaDomain}=https://org.okta.com
+{authorizationServerId}=ausxxxxxxxx
+{oktaAudience}=api://default
+{oktaClientId}=0oaxxxxx
+```
 
-### 6.3 Node.js
+Kurallar:
+- Her satir `{Key}=value`
+- Sol taraf sadece `{}` formunda yazilir (`#{}` yazilmaz)
+- Bos key kabul edilmez
 
-- `process.env.DATABASE_URL`
-- `process.env.REDIS_URL`
+## 8. En Kritik Nokta: Redis Token Secimi
 
-### 6.4 Python
+Ayni `redis` icin iki token vardir. Dogru token uygulamanin bekledigi formata gore secilir.
 
-- `os.environ["DATABASE_URL"]`
-- `os.environ["REDIS_URL"]`
+- `.NET + StackExchange.Redis` (`AddStackExchangeRedisCache`, `ConnectionMultiplexer`) icin oncelik:
+  - `host:port` -> `{default_redis}`
+- URL zorunlu bekleyen framework/library icin:
+  - `redis://...` -> `{default_redis_url}`
 
-### 6.5 Go
+Pratik kural:
+- Emin degilsen .NET app'lerde `Cache:Redis:ConnectionString` icin `{default_redis}` kullan.
+- URL formatina ihtiyac oldugu kesin degilse `{default_redis_url}` kullanma.
 
-- `os.Getenv("DATABASE_URL")`
-- `os.Getenv("REDIS_URL")`
-
-## 7. runtime_profile Kullanimi
+## 9. runtime_profile Kullanimi
 
 Runner isteginde:
 - Global: `runtime_profile`
@@ -133,90 +156,54 @@ Davranis:
 - `node/python/go/java`: `DATABASE_URL` + `REDIS_URL` aliaslarini one cikarir.
 - `custom`: sadece explicit/extra env mantigi.
 
-## 8. extra_env Kurali
+## 10. extra_env Kurali
 
-- `extra_env` her zaman opsiyoneldir.
+- `extra_env` opsiyoneldir.
 - Connection tipi bir key (`ConnectionStrings__...`, `DATABASE_URL`, `REDIS_URL`, vb.) `extra_env` ile gelirse platformun otomatik degerini override eder.
 
-## 8.1 Placeholder Replacements Kurali
+## 11. Appsettings Tarama Mantigi
 
-Runner isteginde su alanlar kullanilir:
+Runner kaynak kodu (`git` veya `zip`) indirir, `appsettings*.json` dosyalarini tarar.
 
-- `auto_defaults` (varsayilan: `true`)
-- `replacements` (kullanici map'i)
-
-Platform varsayilan placeholder'lari:
-
-- `{default_db}` -> SQL .NET connection string
-- `{default_db_url}` -> SQL URL
-- `{default_redis}` -> `host:port`
-- `{default_redis_url}` -> Redis URL
-
-Kullanici ek placeholder verebilir:
-
-```json
-{
-  "replacements": {
-    "{Mehmet}": "x"
-  }
-}
-```
-
-Runner `appsettings*.json` icindeki string alanlari tarar, placeholder replace eder ve degisen key-path'leri Kubernetes env olarak inject eder.
-Desteklenen placeholder formatlari: `{token}` ve `#{token}#`.
-
-### 8.2 Uygulama ve UI Ornekleri
-
-Appsettings icinde placeholder girisi:
-
-```json
-{
-  "ConnectionStrings": {
-    "DefaultConnection": "{default_db}",
-    "Redis": "#{default_redis_url}#",
-    "MasterDataConnection": "{Mehmet}"
-  },
-  "FeatureFlags": {
-    "TenantCode": "{TenantCode}"
-  },
-  "Okta": {
-    "RequireHttpsMetadata": "#{requireHttpsMetadata}#"
-  }
-}
-```
-
-UI `Placeholder Replacements` alanina giris formati:
-
-```text
-{Mehmet}=Host=postgres.ws-demo.svc.cluster.local;Port=5432;Database=MasterDb;Username=postgres;Password=StrongPass_123!;SSL Mode=Disable;
-{TenantCode}=TR01
-{requireHttpsMetadata}=false
-```
-
-Format kurali:
-- Her satir `{Key}=value` seklindedir.
-- Sol taraf mutlaka `{}` ile yazilmalidir (`#{}` degil).
-- DB icin standart token: `{default_db}`
-- Redis URL icin standart token: `{default_redis_url}`
-
-## 9. Appsettings Tarama Mantigi
-
-Runner kaynak kodu (`git` veya `zip`) indirir, `appsettings*.json` dosyalarinda `ConnectionStrings` keylerini tarar ve uygun env maplerini olusturur.
+Tarama sonucu:
+- `ConnectionStrings` altindaki SQL/Redis key'leri map edilir.
+- Placeholder replace edilen string key-path'ler env'e cevrilir (`Section__Sub__Key`).
+- `Hangfire` gecen `ConnectionStrings` keyleri SQL sayilir.
 
 Not:
 - Key placeholder olsa bile platform key adina gore map uretir.
-- `Hangfire` keyleri SQL kabul edilir.
+- Replace edilmeyen tokenlar warning olarak run event'e yazilir.
 
-## 10. Multi-App Ornek Request
+## 12. Deploy Sonrasi Env Guncelleme (Canli Patch)
+
+Deploy olduktan sonra env eklemek/guncellemek icin:
+- Endpoint: `POST /app/env`
+
+Request ornegi:
+
+```json
+{
+  "workspace": "ws-demo",
+  "app": "demoapp",
+  "restart": true,
+  "env": [
+    { "name": "ASPNETCORE_ENVIRONMENT", "value": "Staging" },
+    { "name": "Okta__OktaDomain", "value": "https://org.okta.com" }
+  ]
+}
+```
+
+Not:
+- Bu islem Git repo dosyasini degistirmez; sadece canli deployment env'ini gunceller.
+- `restart=true` ile rollout restart tetiklenir.
+
+## 13. Multi-App Ornek Request
 
 ```json
 {
   "workspace": "ws-suite",
   "runtime_profile": "auto",
   "auto_defaults": true,
-  "replacements": {
-    "{Mehmet}": "x"
-  },
   "source": {
     "type": "zip",
     "zip_url": "http://zip-server.tekton-pipelines.svc.cluster.local:8080/suite.zip"
@@ -247,24 +234,26 @@ Not:
 }
 ```
 
-## 11. Uygulama Ekiplerine Verilecek Kisa Sozlesme
+## 14. Uygulama Ekiplerine Verilecek Kisa Sozlesme
 
-Platform ekibi uygulama ekiplerine su 4 maddeyi vermelidir:
+Platform ekibi uygulama ekiplerine su 6 maddeyi vermelidir:
 
 1. Config dosyaniza `ConnectionStrings.DefaultConnection`, `ConnectionStrings.Redis`, (varsa) `ConnectionStrings.Hangfire` keylerini ekleyin.
-2. Bu degerler placeholder olabilir; gercek degeri platform runtime'da verecek.
-3. Uygulamaniz env override okuyacak sekilde yazilmis olmali.
-4. Ozel key gerekiyorsa platforma `extra_env` ile bildirin.
+2. Bu degerler placeholder olabilir; gercek degerleri platform runtime'da verir.
+3. .NET app'lerde Redis icin once `{default_redis}` deneyin.
+4. URL gerekiyorsa acikca `{default_redis_url}` kullanin.
+5. Ozel key gerekiyorsa `replacements` veya `extra_env` ile bildirin.
+6. Deploy sonrasi canli env guncellemesi icin `/app/env` kullanilabilir.
 
-## 12. Ne Zaman Hata Alinir?
+## 15. Sik Hata Nedenleri
 
-Tipik nedenler:
-- Uygulama placeholder'i runtime env ile override edemiyor.
-- Uygulama farkli key bekliyor (ornegin `MyDbConnection`) ama platforma bildirilmemis.
+- Placeholder yazimi dogru ama uygulama farkli key okuyor.
+- `default_redis_url` kullanildi ama uygulama `host:port` bekliyor.
+- .NET env key yazim hatasi var (ornek: `ASPNETCORE_ENVIRONMENT` yerine yanlis yazim).
+- Uygulama kodu belirli bir ayari (ornek `RequireHttpsMetadata`) config'ten okumuyor.
 - Yanlis runtime profile secimi.
-- Build/push asamasinda registry/network hatasi.
 
-## 13. Sonuc
+## 16. Sonuc
 
 Bu sozlesme ile:
 - Dil fark etmeksizin tek deploy modeli korunur.
