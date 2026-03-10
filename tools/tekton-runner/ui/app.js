@@ -42,6 +42,7 @@ let hostInfo = { host_ip: "" };
 let externalMap = [];
 let externalInFlight = {};
 let externalDraft = {};
+let envPatchDraft = {};
 let lastRunId = "";
 
 function addActivity(entry) {
@@ -822,9 +823,55 @@ function renderWorkspaceDetail() {
     };
     externalWrap.append(externalInput, externalBtn);
 
+    const envWrap = document.createElement("div");
+    envWrap.className = "detail-card";
+    const envDraftKey = `env::${draftKey}`;
+    envWrap.innerHTML = `<div class="detail-label">Post-Deploy Env (KEY=value)</div>
+      <textarea class="env-input" rows="4" placeholder="ASPNETCORE_ENVIRONMENT=Staging&#10;Okta__RequireHttpsMetadata=false"></textarea>
+      <div class="detail-actions">
+        <label class="detail-label"><input type="checkbox" class="env-restart" checked /> Restart after update</label>
+        <button class="btn ghost env-apply" type="button">Apply Env</button>
+      </div>`;
+    const envInputEl = envWrap.querySelector(".env-input");
+    const envRestartEl = envWrap.querySelector(".env-restart");
+    const envApplyBtn = envWrap.querySelector(".env-apply");
+    if (envInputEl) {
+      envInputEl.value = envPatchDraft[envDraftKey] || "";
+      envInputEl.oninput = () => {
+        envPatchDraft[envDraftKey] = envInputEl.value;
+      };
+    }
+    if (envApplyBtn) {
+      envApplyBtn.onclick = async () => {
+        try {
+          const env = parseEnvLines(envInputEl?.value || "", "Post-Deploy Env");
+          if (!env.length) {
+            throw new Error("En az bir env girilmeli.");
+          }
+          const res = await handleRequest("POST", "/app/env", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              workspace: currentWorkspace,
+              app: name,
+              restart: envRestartEl?.checked !== false,
+              env
+            })
+          });
+          if (res.status === 200) {
+            envPatchDraft[envDraftKey] = "";
+            if (envInputEl) envInputEl.value = "";
+            await refreshWorkspaceStatus(currentWorkspace, true);
+          }
+        } catch (err) {
+          addActivity({ method: "UI", endpoint: "app/env", status: 400, message: String(err.message || err) });
+        }
+      };
+    }
+
     btns.append(restartAppBtn, deleteAppBtn);
 
-    card.append(btns, scaleWrap, externalWrap);
+    card.append(btns, scaleWrap, externalWrap, envWrap);
     appSection.append(card);
   });
 
@@ -1121,6 +1168,28 @@ function parseExtraEnv(prefix) {
         throw new Error(`Extra Environment Variables satir ${index + 1} gecersiz. Format KEY=value olmali.`);
       }
       return { name: line.slice(0, eq).trim(), value: line.slice(eq + 1).trim() };
+    });
+}
+
+function parseEnvLines(raw, label = "Env") {
+  if (!raw || !raw.trim()) {
+    return [];
+  }
+  return raw
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line, index) => {
+      const eq = line.indexOf("=");
+      if (eq <= 0) {
+        throw new Error(`${label} satir ${index + 1} gecersiz. Format KEY=value olmali.`);
+      }
+      const name = line.slice(0, eq).trim();
+      const value = line.slice(eq + 1);
+      if (!name) {
+        throw new Error(`${label} satir ${index + 1} key bos olamaz.`);
+      }
+      return { name, value };
     });
 }
 

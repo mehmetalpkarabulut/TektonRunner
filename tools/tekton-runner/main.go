@@ -50,6 +50,13 @@ type EnvVar struct {
 	Value string `json:"value"`
 }
 
+type AppEnvUpdateRequest struct {
+	Workspace string   `json:"workspace"`
+	App       string   `json:"app"`
+	Env       []EnvVar `json:"env"`
+	Restart   bool     `json:"restart"`
+}
+
 type AppSpec struct {
 	AppName        string `json:"app_name"`
 	Project        string `json:"project"`
@@ -1658,6 +1665,46 @@ func runServer(addr, apiKey string) {
 		w.Write([]byte(`{"status":"restarted"}`))
 	})
 
+	http.HandleFunc("/app/env", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		var req AppEnvUpdateRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid json", http.StatusBadRequest)
+			return
+		}
+		workspace := strings.TrimSpace(req.Workspace)
+		app := sanitizeName(req.App)
+		if workspace == "" || app == "" {
+			http.Error(w, "workspace and app are required", http.StatusBadRequest)
+			return
+		}
+		if !strings.HasPrefix(workspace, "ws-") {
+			http.Error(w, "workspace must start with ws-", http.StatusBadRequest)
+			return
+		}
+		envVars, err := sanitizeEnvVars(req.Env)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if err := updateAppEnv(workspace, app, envVars, req.Restart); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"status":    "updated",
+			"workspace": workspace,
+			"app":       app,
+			"env_count": len(envVars),
+			"restart":   req.Restart,
+		})
+	})
+
 	http.HandleFunc("/workspace/restart", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -1779,6 +1826,7 @@ func runServer(addr, apiKey string) {
 		"/pod/logs/stream",
 		"/app/delete",
 		"/app/restart",
+		"/app/env",
 		"/openapi.json",
 		"/docs",
 		"/hostinfo",
@@ -2557,6 +2605,7 @@ func withResolvedPort(rawURL string, port int) string {
 }
 
 var placeholderTokenRe = regexp.MustCompile(`#\{[^{}]+\}#|\{[^{}]+\}`)
+var kubeEnvNameRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 func isAutoDefaultsEnabled(in Input) bool {
 	if in.AutoDefaults == nil {
@@ -4258,6 +4307,55 @@ func rolloutRestartAll(workspace string) error {
 	return nil
 }
 
+func sanitizeEnvVars(in []EnvVar) ([]EnvVar, error) {
+	out := make([]EnvVar, 0, len(in))
+	seen := map[string]bool{}
+	for i, env := range in {
+		name := strings.TrimSpace(env.Name)
+		if name == "" {
+			return nil, fmt.Errorf("env[%d].name is required", i)
+		}
+		if !kubeEnvNameRe.MatchString(name) {
+			return nil, fmt.Errorf("env[%d].name is invalid: %s", i, name)
+		}
+		if seen[name] {
+			continue
+		}
+		seen[name] = true
+		out = append(out, EnvVar{
+			Name:  name,
+			Value: env.Value,
+		})
+	}
+	if len(out) == 0 {
+		return nil, fmt.Errorf("env is required")
+	}
+	return out, nil
+}
+
+func updateAppEnv(workspace, app string, envVars []EnvVar, restart bool) error {
+	kcfg := filepath.Join("/home/beko/kubeconfigs", workspace+".yaml")
+	if !fileExists(kcfg) {
+		return fmt.Errorf("kubeconfig not found for workspace %s", workspace)
+	}
+	args := []string{"--kubeconfig", kcfg, "-n", workspace, "set", "env", "deployment/" + app}
+	for _, env := range envVars {
+		args = append(args, env.Name+"="+env.Value)
+	}
+	cmd := exec.Command("kubectl", args...)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("set env failed: %v", err)
+	}
+	if restart {
+		if err := rolloutRestart(workspace, app); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func openAPISpec() string {
 	return `{
   "openapi": "3.0.3",
@@ -4501,6 +4599,16 @@ func openAPISpec() string {
         ],
         "responses": { "200": { "description": "Restarted" } }
       }
+    },
+    "/app/env": {
+      "post": {
+        "summary": "Update app environment variables after deployment",
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AppEnvUpdateRequest" } } }
+        },
+        "responses": { "200": { "description": "Updated" } }
+      }
     }
   },
   "components": {
@@ -4597,6 +4705,26 @@ func openAPISpec() string {
           "workspace": { "type": "string" },
           "app": { "type": "string" },
           "external_port": { "type": "integer" }
+        }
+      },
+      "EnvVar": {
+        "type": "object",
+        "properties": {
+          "name": { "type": "string" },
+          "value": { "type": "string" }
+        }
+      },
+      "AppEnvUpdateRequest": {
+        "type": "object",
+        "required": ["workspace", "app", "env"],
+        "properties": {
+          "workspace": { "type": "string" },
+          "app": { "type": "string" },
+          "restart": { "type": "boolean" },
+          "env": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/EnvVar" }
+          }
         }
       }
     }

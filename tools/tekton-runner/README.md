@@ -141,6 +141,7 @@ API key ile:
 - `POST /run?dry_run=true` -> YAML döner
 - `GET /run/logs?workspace=ws-...&app=...` -> build+deploy timeline loglari (JSON)
 - `GET /run/logs?workspace=ws-...&app=...&format=text` -> okunabilir timeline loglari (text)
+- `POST /app/env` -> deploy sonrasinda secili app deployment env degerlerini gunceller (upsert)
 
 `/run/logs` varsayilan olarak su loglari bir arada dondurur:
 - timeline event loglari
@@ -161,6 +162,20 @@ Opsiyonel query parametreleri:
 - `include_taskrun=true|false`
 - `include_containers=true|false`
 - `tail_raw=400` (TaskRun/container ham log tail satiri)
+
+`POST /app/env` request ornegi:
+
+```json
+{
+  "workspace": "ws-demo",
+  "app": "demoapp",
+  "restart": true,
+  "env": [
+    { "name": "ASPNETCORE_ENVIRONMENT", "value": "Staging" },
+    { "name": "Okta__RequireHttpsMetadata", "value": "false" }
+  ]
+}
+```
 
 ### Postman Örneği
 

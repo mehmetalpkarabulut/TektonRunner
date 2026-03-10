@@ -356,7 +356,7 @@ body {
   margin-bottom: 10px;
 }
 
-input, select {
+input, select, textarea {
   flex: 1;
   min-width: 140px;
   border-radius: 10px;
@@ -364,6 +364,13 @@ input, select {
   background: var(--panel-2);
   color: var(--text);
   padding: 10px 12px;
+}
+
+textarea {
+  width: 100%;
+  resize: vertical;
+  font-family: var(--mono);
+  line-height: 1.4;
 }
 
 .btn {
@@ -596,6 +603,10 @@ input, select {
 .external-input {
   min-width: 120px;
   max-width: 140px;
+}
+
+.env-input {
+  min-height: 88px;
 }
 
 .split-panel {
