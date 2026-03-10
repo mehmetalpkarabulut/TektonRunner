@@ -1,191 +1,207 @@
-# Ortak Sozlesme
+# Ortak Sozlesme (Tum Diller)
 
-Bu dokuman, Tekton Runner platformuna deploy edilecek yeni repo/proje ureten tum gelistiriciler icin kurumsal standartlari tanimlar. Amac, farkli ekiplerden gelen projelerin ayni operasyon modeliyle guvenli, izlenebilir ve otomasyon uyumlu sekilde calismasidir.
+Bu dokuman, Tekton Runner platformuna deploy edilen tum uygulamalar icin ortak konfigurasyon ve deployment sozlesmesidir.
 
-## 1. Amac ve Kapsam
+Kapsam:
+- .NET, Java, Node.js, Python, Go
+- Tek app veya multi-app (`apps[]`) deploy
+- Ayni workspace icinde birden fazla pod/service
 
-- Tum uygulamalarda tek tip deploy davranisi saglamak.
-- Elle islem ihtiyacini azaltmak, pipeline basarisini artirmak.
-- Uygulama, container, veritabani, migration, gozlemlenebilirlik ve guvenlik beklentilerini netlestirmek.
+## 1. Temel Prensip
 
-Bu sozlesme .NET tabanli servisler icin zorunlu; diger stackler icin de referans model olarak kullanilir.
+1. Uygulama kodu ortaktan gelsin, ortam farklari runtime env ile verilsin.
+2. Secret ve connection string degerleri repoda tutulmasin.
+3. Uygulama config dosyasi (`appsettings`, `application.yml`, `.env.example`) sadece key/placeholder tasiyabilir.
+4. Gercek degeri runner Kubernetes Deployment `env` alanina inject eder.
 
-## 1.1 Staging Icin Zorunlu Minimum Kurallar
+## 2. Workspace ve Pod Modeli
 
-1. Uygulama su env anahtarlarini kullanmali:
+- Her deploy bir workspace cluster/namespace uzerinde calisir (`ws-...`).
+- `apps[]` kullanildiginda her app icin ayri `Deployment + Service` olusur.
+- Backend ve frontend ayni workspace'te farkli podlarda kosabilir.
+
+Ornek ic DNS:
+- `backend.ws-demo.svc.cluster.local`
+- `frontend.ws-demo.svc.cluster.local`
+- `postgres.ws-demo.svc.cluster.local`
+- `redis.ws-demo.svc.cluster.local`
+
+Not:
+- Pod portlari ayni olabilir; podlar birbirinden izoledir.
+- Service `targetPort` ilgili app'in `container_port` degerine baglanir.
+
+## 3. Zorunlu Config Anahtarlari (Uygulama Tarafi)
+
+Tum ekipler uygulama config dosyasinda asagidaki keyleri tanimlamalidir (placeholder olabilir):
+
+- `ConnectionStrings:DefaultConnection`
+- `ConnectionStrings:Redis`
+- `ConnectionStrings:Hangfire` (Hangfire kullananlarda)
+
+Bu anahtarlar .NET disi dillerde dogrudan kullanilmayabilir; yine de platform standardi olarak tutulur.
+
+## 4. Platformun Urettigi Env Anahtarlari
+
+Runner dependency tipine gore env inject eder.
+
+SQL:
 - `ConnectionStrings__DefaultConnection`
+- `SQL_CONNECTION_STRING`
+- `DEFAULT_CONNECTION`
+- `DATABASE_URL` (runtime profile'a gore)
+
+Redis:
 - `ConnectionStrings__Redis`
+- `REDIS_CONNECTION`
+- `REDIS_CONNECTION_STRING`
+- `REDIS_URL`
 
-2. Baglanti string parse esnek olmalidir:
-- PostgreSQL icin hem `Host=...;Port=...` hem URL formati desteklenmeli.
-- Redis icin `host:port` gelirse otomatik `redis://` eklenmeli.
+Hangfire:
+- `ConnectionStrings__Hangfire` anahtari SQL olarak kabul edilir ve SQL connection ile override edilir.
 
-3. Staging'de migration adimi pipeline disi tutulur:
-- `migration.enabled=false`
-- Uygulama startup'ta semayi kendisi hazirlar (`Migrate` / `EnsureCreated` / `CREATE TABLE IF NOT EXISTS`).
+## 5. Connection String Formatlari
 
-4. Tekton dependency secimi:
-- DB+cache gereken servislerde `dependency.type=both`.
+### 5.1 SQL (.NET/Npgsql formati)
 
-5. Operasyon:
-- Ayni workspace/app icin eszamanli birden fazla tetikleme yapilmaz.
+`Host=postgres.<workspace>.svc.cluster.local;Port=5432;Database=<DB>;Username=postgres;Password=<PASS>;SSL Mode=Disable;`
 
-## 2. Zorunlu Repo Icerigi
+### 5.2 SQL (URL formati)
 
-Her repo asagidakileri icermelidir:
+`postgresql://postgres:<PASS>@postgres.<workspace>.svc.cluster.local:5432/<DB>?sslmode=disable`
 
-1. `Dockerfile`
-- Uretim image'i tek komutla olusturulabilmeli.
-- Final image minimum gerekli dosyalari icermeli.
+### 5.3 Redis
 
-2. `migrate.sh`
-- Veritabani migration giris scripti.
-- Image icinde `/app/migrate.sh` yoluna kopyalanmali.
-- Calistirilabilir olmali (`chmod +x`).
+- Host/port: `redis.<workspace>.svc.cluster.local:6379`
+- URL: `redis://redis.<workspace>.svc.cluster.local:6379/0`
 
-3. `Migrations/` (EF Core kullanan projelerde)
-- Migration dosyalari repoda versiyonlanmali.
-- "Lokalimde var" tipinde migration kabul edilmez.
+## 6. Dil Bazli Uygulama Beklentisi
 
-4. `README.md`
-- Projenin calisma amaci.
-- Gerekli environment variable listesi.
-- Lokalde calistirma adimlari.
-- Migration ve health endpoint bilgisi.
+### 6.1 .NET
 
-5. `.dockerignore`
-- Gereksiz dosyalar image build context'ine girmemeli.
+`appsettings*.json` icinde su keyler olmali:
 
-## 3. Uygulama Davranis Sozlesmesi
-
-1. Port
-- Uygulama container icinde tek port dinlemeli.
-- Varsayilan beklenti: `8080` (farkli ise acikca belirtilmeli).
-
-2. Health endpoint
-- En az bir health endpoint olmali (`/health`, `/healthz` veya benzeri).
-- Uygulama hazir olmadan basarili donmemeli.
-
-3. Graceful shutdown
-- SIGTERM aldiginda duzgun kapanis yapmali.
-- Ani kapanista veri kaybi/yarim islem birakmamali.
-
-4. Stateless davranis
-- Uygulama container filesystem'ini kalici depolama gibi kullanmamali.
-- Kalici veri DB/object storage uzerinden yonetilmeli.
-
-## 4. Configuration ve Secret Yonetimi
-
-1. Konfigurasyonlar env var ile verilmeli.
-2. Secret'lar repoya yazilmamali (sifre, token, sertifika vb.).
-3. Ortam bazli degerler hard-code edilmemeli.
-4. Zorunlu env varlar README'de "required" olarak acik belirtilmeli.
-
-## 5. Veritabani ve Connection String Sozlesmesi
-
-Platform DB baglantisini otomatik uretip secret olarak enjekte eder.
-
-Zorunlu standart:
-- Varsayilan DB env anahtari: `ConnectionStrings__DefaultConnection`
-
-Kurallar:
-1. Uygulama baglanti bilgisini bu env anahtarindan okuyabilmeli.
-2. Connection string kod icinde sabit yazilmamali.
-3. SQL dependency seciliyse uygulama PostgreSQL uyumlu olmalidir.
-
-## 6. Migration Sozlesmesi (Zorunlu)
-
-1. `migration.enabled=true` kullanildiginda migration adimi deploy oncesi calisir.
-2. `migration.command/args` bos birakilabilir; bu durumda runner image icinde standart script yollarini dener.
-3. Minimum beklenti: `/app/migrate.sh` image icinde mevcut ve executable olmali.
-
-### 6.1 Onerilen Model: EfBundle
-
-EF Core projelerinde runtime'da `dotnet-ef` bagimliligini azaltmak icin `efbundle` onerilir.
-
-Ornek akisin ozeti:
-1. Build stage'de `dotnet ef migrations bundle` uret.
-2. Final stage'e `/app/efbundle` kopyala.
-3. `migrate.sh` icinde `efbundle` calistir.
-
-Ornek `migrate.sh`:
-
-```sh
-#!/usr/bin/env sh
-set -eu
-
-/app/efbundle --connection "$ConnectionStrings__DefaultConnection"
+```json
+{
+  "ConnectionStrings": {
+    "DefaultConnection": "placeholder",
+    "Redis": "placeholder",
+    "Hangfire": "placeholder"
+  }
+}
 ```
 
-## 7. Dockerfile Sozlesmesi
+Runtime'da `ConnectionStrings__...` env ile override edilir.
 
-1. Multi-stage build kullanimi onerilir.
-2. Final image'ta root disi user tercih edilmelidir.
-3. Asagidakiler final image'a alinmalidir:
-- uygulama binary/artifact
-- `/app/migrate.sh`
-- (varsa) `/app/efbundle`
+### 6.2 Java (Spring Boot)
 
-4. Zorunlu izinler:
+Onerilen binding:
+- `spring.datasource.url=${DATABASE_URL}`
+- `spring.data.redis.url=${REDIS_URL}`
 
-```dockerfile
-COPY migrate.sh /app/migrate.sh
-RUN chmod +x /app/migrate.sh
+### 6.3 Node.js
+
+- `process.env.DATABASE_URL`
+- `process.env.REDIS_URL`
+
+### 6.4 Python
+
+- `os.environ["DATABASE_URL"]`
+- `os.environ["REDIS_URL"]`
+
+### 6.5 Go
+
+- `os.Getenv("DATABASE_URL")`
+- `os.Getenv("REDIS_URL")`
+
+## 7. runtime_profile Kullanimi
+
+Runner isteginde:
+- Global: `runtime_profile`
+- App bazli: `apps[].runtime_profile`
+
+Desteklenenler:
+- `auto` (varsayilan)
+- `dotnet`
+- `node`
+- `python`
+- `go`
+- `java`
+- `custom`
+
+Davranis:
+- `dotnet`: `ConnectionStrings__...` aliaslarini one cikarir.
+- `node/python/go/java`: `DATABASE_URL` + `REDIS_URL` aliaslarini one cikarir.
+- `custom`: sadece explicit/extra env mantigi.
+
+## 8. extra_env Kurali
+
+- `extra_env` her zaman opsiyoneldir.
+- Connection tipi bir key (`ConnectionStrings__...`, `DATABASE_URL`, `REDIS_URL`, vb.) `extra_env` ile gelirse platformun otomatik degerini override eder.
+
+## 9. Appsettings Tarama Mantigi
+
+Runner kaynak kodu (`git` veya `zip`) indirir, `appsettings*.json` dosyalarinda `ConnectionStrings` keylerini tarar ve uygun env maplerini olusturur.
+
+Not:
+- Key placeholder olsa bile platform key adina gore map uretir.
+- `Hangfire` keyleri SQL kabul edilir.
+
+## 10. Multi-App Ornek Request
+
+```json
+{
+  "workspace": "ws-suite",
+  "runtime_profile": "auto",
+  "source": {
+    "type": "zip",
+    "zip_url": "http://zip-server.tekton-pipelines.svc.cluster.local:8080/suite.zip"
+  },
+  "image": {
+    "registry": "lenovo:8443",
+    "tag": "latest"
+  },
+  "dependency": {
+    "type": "both"
+  },
+  "apps": [
+    {
+      "app_name": "backend",
+      "project": "backend",
+      "container_port": 8080,
+      "runtime_profile": "dotnet",
+      "context_sub_path": "src/backend"
+    },
+    {
+      "app_name": "frontend",
+      "project": "frontend",
+      "container_port": 3000,
+      "runtime_profile": "node",
+      "context_sub_path": "src/frontend"
+    }
+  ]
+}
 ```
 
-5. Image tag stratejisi:
-- `latest` yaninda surumlu/tagli image kullanimi zorunlu tavsiyedir.
+## 11. Uygulama Ekiplerine Verilecek Kisa Sozlesme
 
-## 8. Gozlemlenebilirlik ve Loglama
+Platform ekibi uygulama ekiplerine su 4 maddeyi vermelidir:
 
-1. Uygulama loglari stdout/stderr uzerinden cikmali.
-2. Loglar yapisal (en azindan seviyeli) olmali: `info`, `warn`, `error`.
-3. Hata aninda anlasilir mesaj uretmeli; sessiz fail kabul edilmez.
-4. Baslangic logunda asagidakiler gorunmeli:
-- uygulama surumu
-- dinlenen port
-- aktif ortam/profil (gizli bilgi icermeden)
+1. Config dosyaniza `ConnectionStrings.DefaultConnection`, `ConnectionStrings.Redis`, (varsa) `ConnectionStrings.Hangfire` keylerini ekleyin.
+2. Bu degerler placeholder olabilir; gercek degeri platform runtime'da verecek.
+3. Uygulamaniz env override okuyacak sekilde yazilmis olmali.
+4. Ozel key gerekiyorsa platforma `extra_env` ile bildirin.
 
-## 9. Guvenlik Gereksinimleri
+## 12. Ne Zaman Hata Alinir?
 
-1. Hard-coded secret yasak.
-2. Gereksiz acik port yasak.
-3. Kullanilmayan package/tool image'tan temizlenmeli.
-4. Mumkunse minimal base image kullanilmali.
-5. Uygulama icinde admin/default sifre ile calisma yasak.
+Tipik nedenler:
+- Uygulama placeholder'i runtime env ile override edemiyor.
+- Uygulama farkli key bekliyor (ornegin `MyDbConnection`) ama platforma bildirilmemis.
+- Yanlis runtime profile secimi.
+- Build/push asamasinda registry/network hatasi.
 
-## 10. CI/CD ve Release Beklentileri
+## 13. Sonuc
 
-1. Her merge/push'ta en az build dogrulamasi kosmali.
-2. Test kapsami ekip hedefine gore artirilir; minimum smoke test onerilir.
-3. Uretim release'leri geri alinabilir (rollback-friendly) olmalidir.
-4. Kirici degisiklikler README ve release note'da belirtilmelidir.
-
-## 11. Monorepo / Coklu Servis Durumu
-
-Coklu servis barindiran repolarda:
-1. Her servis icin acik context sub-path tanimlanmali.
-2. Her servisin kendi migration ve config gereksinimi dokumante edilmeli.
-3. Ortak scriptler (build/migrate) standart adla versiyonlanmali.
-
-## 12. Minimum Uyum Kontrol Listesi
-
-Deploy oncesi "hazir" sayilmak icin tum maddeler `Evet` olmali:
-
-1. Dockerfile var ve image build aliyor.
-2. `migrate.sh` var ve executable.
-3. (EF ise) `Migrations/` repoda mevcut.
-4. Uygulama `ConnectionStrings__DefaultConnection` okuyabiliyor.
-5. Health endpoint calisiyor.
-6. Loglar stdout/stderr'e akiyor.
-7. Secret'lar repoya yazilmamis.
-8. README gerekli env ve calistirma adimlarini iceriyor.
-
-## 13. Platform Uyum Ozeti
-
-Bu sozlesmeye uygun reposu olan ekipler:
-- Tekton Runner ile daha az manuel mudahale ile deploy olur,
-- DB migration adiminda daha az hata alir,
-- Operasyon ve destek surecinde daha hizli sorun cozer.
-
-Sozlesmeye uyumsuzluk durumunda platform ekibi deploy'u durdurma veya duzeltme talebi acma hakkina sahiptir.
+Bu sozlesme ile:
+- Dil fark etmeksizin tek deploy modeli korunur.
+- Ayni workspace icinde coklu pod senaryosu standardize edilir.
+- Connection string ve secret yonetimi merkezi ve izlenebilir kalir.
