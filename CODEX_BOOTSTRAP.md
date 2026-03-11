@@ -66,6 +66,10 @@ export KUBECONFIG=/home/beko/kubeconfigs/tekton.yaml
 kubectl apply -f https://storage.googleapis.com/tekton-releases/pipeline/latest/release.yaml
 kubectl apply -f https://storage.googleapis.com/tekton-releases/triggers/latest/release.yaml
 kubectl apply -f https://storage.googleapis.com/tekton-releases/triggers/latest/interceptors.yaml
+kubectl label namespace tekton-pipelines \
+  pod-security.kubernetes.io/enforce=privileged \
+  pod-security.kubernetes.io/audit=privileged \
+  pod-security.kubernetes.io/warn=privileged --overwrite
 ```
 
 Kontrol:
@@ -193,7 +197,20 @@ Not:
 
 ## 12) En Sik Sorunlar
 
-### A) ImagePullBackOff + `lookup lenovo ... no such host`
+### A) Tekton build pod'lari PodSecurity / runAsNonRoot hatasi veriyor
+
+- `tekton-pipelines` namespace'i `restricted` ise Kaniko ve bazi mirror image'lar dogal olarak calismaz.
+- Kalici cozum: `tekton-pipelines` namespace label'larini `privileged` yap.
+- Bu ortamda build namespace'i icin onerilen model budur; uygulama workspace'leri ayri kalabilir.
+
+```bash
+kubectl --kubeconfig /home/beko/kubeconfigs/tekton.yaml label namespace tekton-pipelines \
+  pod-security.kubernetes.io/enforce=privileged \
+  pod-security.kubernetes.io/audit=privileged \
+  pod-security.kubernetes.io/warn=privileged --overwrite
+```
+
+### B) ImagePullBackOff + `lookup lenovo ... no such host`
 
 Workspace kind node icinde fix:
 
@@ -211,13 +228,13 @@ sudo docker cp /tmp/lenovo8443-hosts.toml "$NODE":/etc/containerd/certs.d/lenovo
 sudo docker exec "$NODE" sh -lc 'grep -q "config_path = \"/etc/containerd/certs.d\"" /etc/containerd/config.toml || printf "\n[plugins.\"io.containerd.grpc.v1.cri\".registry]\n  config_path = \"/etc/containerd/certs.d\"\n" >> /etc/containerd/config.toml; systemctl restart containerd'
 ```
 
-### B) App ulasilamiyor
+### C) App ulasilamiyor
 
 - Runner endpoint'i host-local olabilir (`127.0.0.1:<port>`). Dis erisim icin `external-map` portunu kullan.
 - Ornek: `http://<HOST_IP>:18739`
 - UI pod `Running` olsa bile uygulama farkli portta dinliyorsa deploy sonrasi runtime port mismatch gorulebilir. Bu durumda Dockerfile `EXPOSE` ve uygulama gercek listening portu kontrol edilmelidir.
 
-### C) `/deps` SQL login hatasi
+### D) `/deps` SQL login hatasi
 
 - Secret icindeki SQL password ile SQL pod auth secret'i uyumsuz olabilir.
 - `kubectl get secret ... -o yaml` ile karsilastir.

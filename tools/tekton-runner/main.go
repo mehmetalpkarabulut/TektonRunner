@@ -13,6 +13,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/http/httputil"
 	neturl "net/url"
 	"os"
 	"os/exec"
@@ -1066,6 +1067,17 @@ func runServer(addr, apiKey string) {
 		key := workspace + "/" + app
 		kcfgPath := filepath.Join("/home/beko/kubeconfigs", workspace+".yaml")
 		reqHost := resolveExternalHost(r)
+		if isHTTPProxyEligible(app) {
+			url := proxyEndpointURL(reqHost, workspace, app)
+			w.Header().Set("Content-Type", "application/json")
+			resp := map[string]any{"endpoint": url}
+			if info, err := getDependencyAccessInfo(kcfgPath, workspace, app); err == nil && len(info) > 0 {
+				addConnectionURL(info, url)
+				resp["access"] = info
+			}
+			_ = json.NewEncoder(w).Encode(resp)
+			return
+		}
 		serverState.mu.Lock()
 		if url, ok := serverState.endpoints[key]; ok {
 			serverState.mu.Unlock()
@@ -1103,6 +1115,47 @@ func runServer(addr, apiKey string) {
 			resp["access"] = info
 		}
 		_ = json.NewEncoder(w).Encode(resp)
+	})
+
+	http.HandleFunc("/app/", func(w http.ResponseWriter, r *http.Request) {
+		trimmed := strings.TrimPrefix(r.URL.Path, "/app/")
+		parts := strings.Split(trimmed, "/")
+		if len(parts) < 2 || strings.TrimSpace(parts[0]) == "" || strings.TrimSpace(parts[1]) == "" {
+			http.Error(w, "path must be /app/{workspace}/{app}/...", http.StatusBadRequest)
+			return
+		}
+		workspace := strings.TrimSpace(parts[0])
+		app := strings.TrimSpace(parts[1])
+		if !isHTTPProxyEligible(app) {
+			http.Error(w, "app is not eligible for HTTP proxy path access", http.StatusBadRequest)
+			return
+		}
+		if len(parts) == 2 && !strings.HasSuffix(r.URL.Path, "/") {
+			http.Redirect(w, r, r.URL.Path+"/", http.StatusMovedPermanently)
+			return
+		}
+		port, err := ensureProxyPort(workspace, app)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusNotFound)
+			return
+		}
+		target, _ := neturl.Parse(fmt.Sprintf("http://127.0.0.1:%d", port))
+		proxy := httputil.NewSingleHostReverseProxy(target)
+		originalDirector := proxy.Director
+		proxy.Director = func(req *http.Request) {
+			originalDirector(req)
+			suffix := "/"
+			if len(parts) > 2 {
+				suffix = "/" + strings.Join(parts[2:], "/")
+			}
+			req.URL.Path = suffix
+			req.URL.RawPath = suffix
+			req.Host = target.Host
+		}
+		proxy.ErrorHandler = func(rw http.ResponseWriter, req *http.Request, proxyErr error) {
+			http.Error(rw, proxyErr.Error(), http.StatusBadGateway)
+		}
+		proxy.ServeHTTP(w, r)
 	})
 
 	http.HandleFunc("/workspaces", func(w http.ResponseWriter, r *http.Request) {
@@ -3132,6 +3185,11 @@ func handleZipDeploy(in Input, targets []AppTarget, taskRuns map[string]string, 
 				host = "127.0.0.1"
 			}
 			url := fmt.Sprintf("http://%s:%d", host, port)
+			if extPort, extErr := ensureExternalAccess(clusterName, t.AppName, port); extErr == nil && extPort > 0 {
+				url = withResolvedPort(url, extPort)
+			} else if extErr != nil {
+				log.Printf("external access setup failed for %s/%s: %v", clusterName, t.AppName, extErr)
+			}
 			key := clusterName + "/" + t.AppName
 			serverState.mu.Lock()
 			serverState.endpoints[key] = url
@@ -4035,6 +4093,24 @@ func getServiceNodePort(kubeconfig, namespace, app string) (int, error) {
 	return port, nil
 }
 
+func getServicePort(kubeconfig, namespace, app string) (int, error) {
+	cmd := exec.Command("kubectl", "--kubeconfig", kubeconfig, "-n", namespace, "get", "svc", app, "-o", "jsonpath={.spec.ports[0].port}")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return 0, fmt.Errorf("get service port failed: %v", err)
+	}
+	portStr := strings.TrimSpace(string(out))
+	if portStr == "" {
+		return 0, fmt.Errorf("service port not found")
+	}
+	var port int
+	_, err = fmt.Sscanf(portStr, "%d", &port)
+	if err != nil {
+		return 0, fmt.Errorf("invalid service port: %s", portStr)
+	}
+	return port, nil
+}
+
 func getDependencyAccessInfo(kubeconfig, namespace, app string) (map[string]string, error) {
 	name := strings.ToLower(strings.TrimSpace(app))
 	switch name {
@@ -4051,6 +4127,33 @@ func getDependencyAccessInfo(kubeconfig, namespace, app string) (map[string]stri
 	default:
 		return nil, nil
 	}
+}
+
+func isHTTPProxyEligible(app string) bool {
+	switch strings.ToLower(strings.TrimSpace(app)) {
+	case "postgres", "sql", "redis":
+		return false
+	default:
+		return true
+	}
+}
+
+func proxyEndpointURL(host, workspace, app string) string {
+	return fmt.Sprintf("http://%s/app/%s/%s/", host, workspace, app)
+}
+
+func ensureProxyPort(workspace, app string) (int, error) {
+	if port, ok := portStore.get(workspace, app); ok && port > 0 {
+		if err := ensureForward(workspace, app, port); err == nil {
+			return port, nil
+		}
+	}
+	kcfg := filepath.Join("/home/beko/kubeconfigs", workspace+".yaml")
+	nodePort, err := getServiceNodePort(kcfg, workspace, app)
+	if err != nil {
+		return 0, err
+	}
+	return ensureExternalAccess(workspace, app, nodePort)
 }
 
 func addConnectionURL(access map[string]string, endpoint string) {
@@ -4250,6 +4353,12 @@ func deleteWorkspace(name string) error {
 		}
 	}
 	serverState.mu.Unlock()
+	for _, e := range portStore.list() {
+		if e.Workspace == name {
+			stopForward(e.Workspace, e.App)
+			_ = portStore.remove(e.Workspace, e.App)
+		}
+	}
 	return nil
 }
 
@@ -4271,6 +4380,8 @@ func deleteApp(workspace, app string) error {
 	serverState.mu.Lock()
 	delete(serverState.endpoints, workspace+"/"+app)
 	serverState.mu.Unlock()
+	stopForward(workspace, app)
+	_ = portStore.remove(workspace, app)
 	return nil
 }
 
@@ -5265,6 +5376,93 @@ func forwardKey(workspace, app string) string {
 	return workspace + "::" + app
 }
 
+func stopForward(workspace, app string) {
+	key := forwardKey(workspace, app)
+	forwardMu.Lock()
+	defer forwardMu.Unlock()
+	if fwd, ok := forwards[key]; ok && fwd != nil && fwd.Cmd != nil && fwd.Cmd.Process != nil {
+		_ = fwd.Cmd.Process.Kill()
+	}
+	delete(forwards, key)
+}
+
+func defaultExternalPort(nodePort int) int {
+	if nodePort <= 0 {
+		return 0
+	}
+	return 18000 + (nodePort % 1000)
+}
+
+func isTCPPortFree(port int) bool {
+	ln, err := net.Listen("tcp", fmt.Sprintf("0.0.0.0:%d", port))
+	if err != nil {
+		return false
+	}
+	_ = ln.Close()
+	return true
+}
+
+func waitForTCPPort(address string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		conn, err := net.DialTimeout("tcp", address, 500*time.Millisecond)
+		if err == nil {
+			_ = conn.Close()
+			return nil
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	return fmt.Errorf("port did not become ready: %s", address)
+}
+
+func pickExternalPort(workspace, app string, nodePort int) (int, error) {
+	if port, ok := portStore.get(workspace, app); ok && port > 0 {
+		return port, nil
+	}
+
+	used := map[int]bool{}
+	for _, e := range portStore.list() {
+		used[e.ExternalPort] = true
+	}
+
+	candidates := make([]int, 0, 128)
+	if preferred := defaultExternalPort(nodePort); preferred > 0 {
+		candidates = append(candidates, preferred)
+	}
+	for p := 18000; p <= 18100; p++ {
+		candidates = append(candidates, p)
+	}
+	for _, p := range candidates {
+		if used[p] {
+			continue
+		}
+		if isTCPPortFree(p) {
+			return p, nil
+		}
+	}
+	return 0, fmt.Errorf("no free external port available in 18000-18100")
+}
+
+func ensureExternalAccess(workspace, app string, nodePort int) (int, error) {
+	externalPort, err := pickExternalPort(workspace, app, nodePort)
+	if err != nil {
+		return 0, err
+	}
+	entry := ExternalPortEntry{
+		Workspace:    workspace,
+		App:          app,
+		ExternalPort: externalPort,
+	}
+	if err := portStore.upsert(entry); err != nil {
+		return 0, err
+	}
+	if err := ensureForward(workspace, app, externalPort); err != nil {
+		_ = portStore.remove(workspace, app)
+		return 0, err
+	}
+	return externalPort, nil
+}
+
 func ensureForward(workspace, app string, externalPort int) error {
 	if externalPort <= 0 {
 		return fmt.Errorf("invalid external port")
@@ -5287,25 +5485,24 @@ func ensureForward(workspace, app string, externalPort int) error {
 	forwardMu.Unlock()
 
 	kcfg := filepath.Join("/home/beko/kubeconfigs", workspace+".yaml")
-	nodePort, err := getServiceNodePort(kcfg, workspace, app)
+	servicePort, err := getServicePort(kcfg, workspace, app)
 	if err != nil {
 		return err
 	}
-	nodeIP, err := getNodeInternalIP(kcfg, workspace)
-	if err != nil {
-		return err
-	}
-
-	if _, err := exec.LookPath("socat"); err != nil {
-		return fmt.Errorf("socat not found")
+	if _, err := exec.LookPath("kubectl"); err != nil {
+		return fmt.Errorf("kubectl not found")
 	}
 
 	args := []string{
-		fmt.Sprintf("TCP-LISTEN:%d,bind=0.0.0.0,fork,reuseaddr", externalPort),
-		fmt.Sprintf("TCP:%s:%d", nodeIP, nodePort),
+		"--kubeconfig", kcfg,
+		"-n", workspace,
+		"port-forward",
+		"--address", "0.0.0.0",
+		"svc/" + app,
+		fmt.Sprintf("%d:%d", externalPort, servicePort),
 	}
-	cmd := exec.Command("socat", args...)
-	logPath := fmt.Sprintf("/tmp/socat-%s-%s.log", workspace, app)
+	cmd := exec.Command("kubectl", args...)
+	logPath := fmt.Sprintf("/tmp/kubectl-port-forward-%s-%s.log", workspace, app)
 	f, _ := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
 	if f != nil {
 		cmd.Stdout = f
@@ -5313,6 +5510,10 @@ func ensureForward(workspace, app string, externalPort int) error {
 	}
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("socat start failed: %v", err)
+	}
+	if err := waitForTCPPort(fmt.Sprintf("127.0.0.1:%d", externalPort), 8*time.Second); err != nil {
+		_ = cmd.Process.Kill()
+		return err
 	}
 	forwardMu.Lock()
 	forwards[key] = &Forward{Port: externalPort, Cmd: cmd}

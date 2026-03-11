@@ -748,7 +748,8 @@ function renderWorkspaceDetail() {
       }
     }
 
-    const externalUrl = externalPort && hostInfo.host_ip ? `http://${hostInfo.host_ip}:${externalPort}` : "-";
+    const externalUrl = endpointInfo?.endpoint || (externalPort && hostInfo.host_ip ? `http://${hostInfo.host_ip}:${externalPort}` : "-");
+    const externalUrlHtml = externalUrl && externalUrl !== "-" ? `<a href="${externalUrl}" target="_blank" rel="noreferrer">${externalUrl}</a>` : "-";
 
     ensureEndpoint(currentWorkspace, name);
 
@@ -758,7 +759,7 @@ function renderWorkspaceDetail() {
       <div class="detail-label">Pods</div><div class="detail-value">${counts.running}/${counts.total}</div>
       <div class="detail-label">NodePort</div><div class="detail-value">${nodePort || "-"}</div>
       <div class="detail-label">Endpoint</div><div class="detail-value">${endpoint}</div>
-      <div class="detail-label">External URL</div><div class="detail-value">${externalUrl}</div>
+      <div class="detail-label">External URL</div><div class="detail-value">${externalUrlHtml}</div>
       <div class="detail-label">DB URL</div><div class="detail-value">${accessInfo}</div>
       <div class="detail-label">DB Password</div><div class="detail-value">${accessPassword}</div>`;
 
