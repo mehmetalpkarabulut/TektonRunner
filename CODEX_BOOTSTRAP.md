@@ -136,6 +136,21 @@ curl -i http://127.0.0.1:8088/healthz
 curl -i http://127.0.0.1:8088/ui/
 ```
 
+Nginx ile portsuz erisim istiyorsan ornek host config:
+
+```bash
+sudo install -m 0644 manifests/nginx/tekton-runner-host.conf /etc/nginx/sites-available/tekton-runner
+sudo ln -sf /etc/nginx/sites-available/tekton-runner /etc/nginx/sites-enabled/tekton-runner
+sudo nginx -t
+sudo systemctl reload nginx
+```
+
+Bu config ile:
+
+- Runner UI: `http://<HOST_IP>/ui/`
+- HTTP app proxy: `http://<HOST_IP>/app/<workspace>/<app>/`
+- Zip server: `http://<HOST_IP>/zipfiles/<filename>`
+
 Not:
 
 - Servis tek instance calismalidir. `:8088 bind: address already in use` gorulurse duplicate process temizlenmelidir.
