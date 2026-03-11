@@ -143,6 +143,30 @@ API key ile:
 - `GET /run/logs?workspace=ws-...&app=...&format=text` -> okunabilir timeline loglari (text)
 - `POST /app/env` -> deploy sonrasinda secili app deployment env degerlerini gunceller (upsert)
 
+### Dis Erisim Modeli
+
+Tekton Runner iki farkli dis erisim modeli destekler:
+
+- Port tabanli model:
+  - Runner `external-map` ile hostta bir external port acar.
+  - Ornek: `http://<HOST_IP>:18653`
+- Path tabanli model:
+  - Host nginx `80` uzerinden runner'a reverse proxy yapar.
+  - HTTP uygulamalar icin onerilen adres:
+    - `http://<HOST_IP>/app/<workspace>/<app>/`
+  - Zip server icin onerilen adres:
+    - `http://<HOST_IP>/zipfiles/<filename>`
+
+`GET /endpoint?workspace=...&app=...`:
+
+- HTTP app'lerde kanonik olarak path tabanli URL dondurur.
+- TCP dependency servislerde (`redis`, `sql`, `postgres`) path kullanilmaz; bunlar icin external port gerekir.
+
+Not:
+
+- Windows host/NAT/firewall bulunan ortamlarda path tabanli model tercih edilmelidir.
+- Bu model icin ornek nginx config: `manifests/nginx/tekton-runner-host.conf`
+
 `/run/logs` varsayilan olarak su loglari bir arada dondurur:
 - timeline event loglari
 - ilgili TaskRun ham loglari

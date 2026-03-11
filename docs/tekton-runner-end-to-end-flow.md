@@ -35,7 +35,16 @@ Bu dokuman, sistemde **Tekton**, **tekton-runner** ve **Harbor** rollerini basta
    - app deployment + service apply,
    - runtime port / env uyumluluk kontrolu,
    - external port forward / endpoint map guncelleme.
-7. Kullanici app'e endpoint/external port uzerinden erisir.
+7. Kullanici app'e endpoint/dis URL uzerinden erisir.
+
+Dis erisim iki sekilde olabilir:
+
+- Port tabanli:
+  - `http://<HOST_IP>:18xxx`
+- Path tabanli:
+  - `http://<HOST_IP>/app/<workspace>/<app>/`
+
+HTTP uygulamalar icin tercih edilen model path tabanlidir.
 
 ## 3) Kritik Ayrim: Harbor Push Sonrasi Kim Ne Yapar?
 
@@ -70,8 +79,10 @@ Notlar:
 
 ## 6) Runtime Erişim Modeli
 
-- `runner /endpoint` bazen `127.0.0.1:<nodePort>` donebilir (host-local).
-- Dis erisimde ana yol: `external-map` portlari (`<HOST_IP>:<external_port>`).
+- Eski port tabanli modelde `runner /endpoint` veya `external-map` `<HOST_IP>:<external_port>` donebilir.
+- Guncel HTTP modelinde `runner /endpoint` path tabanli URL dondurur:
+  - `http://<HOST_IP>/app/<workspace>/<app>/`
+- `external-map` halen TCP servisler ve fallback port modeli icin anlamlidir.
 - Ornek:
   - `GET /external-map`
   - `http://<HOST_IP>:18739`
